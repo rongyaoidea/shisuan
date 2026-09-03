@@ -16,6 +16,10 @@ data class Product(
     val category: String = "", // 分类：果酱/酱料/调味品等
     val description: String = "",
     val isActive: Boolean = true, // 是否在产
+    // 包装规格（产品级绑定，不同产品可有不同规格）
+    val weightPerBoxGram: Double = 5000.0,    // 每箱克数
+    val packagesPerBox: Int = 20,             // 每箱包数
+    val weightPerPackageGram: Double = 250.0, // 每包克数
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

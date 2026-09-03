@@ -6,8 +6,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Room 数据库 - 版本 2
- * 新增 Product 表和 BatchIngredient 表
+ * Room 数据库 - 版本 3
+ * v2: 新增 Product 表和 BatchIngredient 表
+ * v3: Product 增加包装规格字段（weightPerBoxGram/packagesPerBox/weightPerPackageGram）
  */
 @Database(
     entities = [
@@ -22,7 +23,7 @@ import kotlinx.coroutines.flow.Flow
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class CostCalDatabase : RoomDatabase() {
@@ -46,7 +47,7 @@ abstract class CostCalDatabase : RoomDatabase() {
                     CostCalDatabase::class.java,
                     "costcal.db"
                 )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { INSTANCE = it }
             }
         }
@@ -291,6 +292,37 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
             INSERT INTO batch_ingredient (batchId, ingredientName, weight, unitPrice, totalCost)
             SELECT id, '原料总成本(迁移)', sampleWeightGram, materialCost / sampleWeightGram, materialCost
             FROM (SELECT id, sampleWeightGram, materialCost FROM batch_record WHERE materialCost > 0)
+        """.trimIndent())
+    }
+}
+
+/**
+ * 数据库迁移：v2 → v3
+ * Product 增加包装规格字段（每箱克数/每箱包数/每包克数）
+ * 从 unit_config 取最新记录填充，无记录时用默认值
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 增加三个包装规格列
+        database.execSQL("ALTER TABLE product ADD COLUMN weightPerBoxGram REAL NOT NULL DEFAULT 5000.0")
+        database.execSQL("ALTER TABLE product ADD COLUMN packagesPerBox INTEGER NOT NULL DEFAULT 20")
+        database.execSQL("ALTER TABLE product ADD COLUMN weightPerPackageGram REAL NOT NULL DEFAULT 250.0")
+
+        // 2. 从 unit_config 取最新记录更新所有产品的包装规格
+        database.execSQL("""
+            UPDATE product SET
+                weightPerBoxGram = COALESCE(
+                    (SELECT weightPerBoxGram FROM unit_config ORDER BY createdAt DESC LIMIT 1),
+                    5000.0
+                ),
+                packagesPerBox = COALESCE(
+                    (SELECT packagesPerBox FROM unit_config ORDER BY createdAt DESC LIMIT 1),
+                    20
+                ),
+                weightPerPackageGram = COALESCE(
+                    (SELECT weightPerPackageGram FROM unit_config ORDER BY createdAt DESC LIMIT 1),
+                    250.0
+                )
         """.trimIndent())
     }
 }

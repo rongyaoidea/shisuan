@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.shisuan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     buildFeatures {
@@ -49,6 +49,9 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
+
+    // OCR - 配料表中文识别（ML Kit 离线模型）
+    implementation(libs.mlkit.text.recognition.chinese)
     
     // Testing
     testImplementation("junit:junit:4.13.2")

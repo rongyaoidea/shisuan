@@ -1,34 +1,19 @@
 package com.example.shisuan.ui.theme
 
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val LightColorScheme = lightColorScheme(
-    primary = AirbnbRed,
-    onPrimary = androidx.compose.ui.graphics.Color.White,
-    primaryContainer = AirbnbRedLight,
-    onPrimaryContainer = AirbnbRedDark,
-    surface = SurfaceWhite,
-    onSurface = TextPrimary,
-    surfaceVariant = InputGray,
-    onSurfaceVariant = TextSecondary,
-    background = BackgroundCream,
-    onBackground = TextPrimary,
-    outline = BorderLight,
-    error = DangerRed
-)
-
 @Composable
-fun ShisuanTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colorScheme = LightColorScheme
+fun ShisuanTheme(
+    darkTheme: Boolean = false, // 工厂环境始终浅色
+    content: @Composable () -> Unit,
+) {
+    val colorScheme = ShisuanColorScheme
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -37,5 +22,10 @@ fun ShisuanTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composabl
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
         }
     }
-    MaterialTheme(colorScheme = colorScheme, typography = AppTypography, content = content)
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = AppTypography,
+        shapes = ShisuanShapes,
+        content = content,
+    )
 }

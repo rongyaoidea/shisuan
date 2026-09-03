@@ -1,62 +1,132 @@
 package com.example.shisuan.ui.screen
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.data.database.BatchIngredient
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
-import com.example.shisuan.ui.theme.DangerRed
-import com.example.shisuan.ui.theme.AirbnbRed
-import com.example.shisuan.ui.theme.AirbnbRedLight
-import com.example.shisuan.ui.theme.TextPrimary
-import com.example.shisuan.ui.theme.TextSecondary
+import com.example.shisuan.ui.icons.Add
+import com.example.shisuan.ui.icons.ArrowBack
+import com.example.shisuan.ui.icons.Camera
+import com.example.shisuan.ui.icons.Delete
+import com.example.shisuan.ui.icons.Edit
+import com.example.shisuan.ui.icons.Flask
+import com.example.shisuan.ui.icons.Gallery
+import com.example.shisuan.ui.icons.Jar
+import com.example.shisuan.ui.icons.Package
+import com.example.shisuan.ui.icons.Scale
+import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.NewBatchViewModel
 import com.example.shisuan.utils.CostCalculator
+import java.io.File
 
 /**
- * 新建批次页 - 配置原料配料
+ * 新建/编辑批次页 - 配置原料配料
+ *
+ * @param editBatchId 非空表示编辑已有批次
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewBatchScreen(
     productId: Long,
+    editBatchId: Long? = null,
     onNavigateBack: () -> Unit,
     viewModel: NewBatchViewModel = hiltViewModel()
 ) {
+    val isEdit = editBatchId != null
+
     var batchName by remember { mutableStateOf("") }
     var sampleWeight by remember { mutableStateOf("") }
     var processingCost by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var showIngredientPicker by remember { mutableStateOf(false) }
+    var showOcrSource by remember { mutableStateOf(false) }
 
     val ingredients by viewModel.ingredients.collectAsState()
     val allIngredients by viewModel.allIngredients.collectAsState()
     val totalMaterialCost by viewModel.totalMaterialCost.collectAsState()
+    val editBatchInfo by viewModel.editBatchInfo.collectAsState()
+    val ocrScanning by viewModel.ocrScanning.collectAsState()
+
+    // 编辑模式：加载批次数据到草稿态
+    LaunchedEffect(editBatchId) {
+        if (editBatchId != null) {
+            viewModel.loadBatchForEdit(editBatchId)
+        }
+    }
+
+    // 批次信息加载完成后预填表单
+    LaunchedEffect(editBatchInfo) {
+        val b = editBatchInfo
+        if (b != null) {
+            batchName = b.batchName
+            sampleWeight = b.sampleWeightGram.toString()
+            processingCost = if (b.processingCost > 0) b.processingCost.toString() else ""
+            note = b.note
+        }
+    }
+
+    // OCR：相机拍照 / 相册选图 → 识别配料表
+    val context = LocalContext.current
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    // 先声明 runOcr（被 launcher 回调引用）
+    val runOcr: (Uri) -> Unit = { uri ->
+        viewModel.recognizeIngredients(uri)
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) cameraUri?.let { runOcr(it) }
+    }
+    val pickImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) runOcr(uri)
+    }
+
+    // 最后声明 openCamera（引用 takePictureLauncher）
+    val openCamera: () -> Unit = {
+        val dir = androidx.core.content.ContextCompat.getExternalFilesDirs(context, null)
+            .firstOrNull()
+        if (dir != null) {
+            val file = File(dir, "ocr_${System.currentTimeMillis()}.jpg")
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            cameraUri = uri
+            takePictureLauncher.launch(uri)
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("新建批次", fontWeight = FontWeight.SemiBold) },
+                title = { Text(if (isEdit) "编辑批次" else "新建批次", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                        Icon(ArrowBack, "返回")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -77,7 +147,7 @@ fun NewBatchScreen(
             // 基本信息
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                shape = CardShape,
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(
@@ -120,11 +190,11 @@ fun NewBatchScreen(
             )
 
             if (ingredients.isEmpty()) {
-                EmptyState("🧪", "还没有添加原料，点下方按钮添加")
+                EmptyState(Flask, "还没有添加原料，点下方按钮添加")
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                    shape = CardShape,
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(8.dp)) {
@@ -144,15 +214,37 @@ fun NewBatchScreen(
                 onClick = { showIngredientPicker = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                Icon(Add, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("添加原料")
+            }
+
+            // OCR 识别配料表
+            if (ocrScanning) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = CardShape,
+                    colors = CardDefaults.cardColors(containerColor = RauschDisabled)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = Rausch
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("正在识别配料表…", color = RauschPressed, fontSize = 14.sp)
+                    }
+                }
             }
 
             // 底部汇总和保存
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                shape = CardShape,
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -160,7 +252,7 @@ fun NewBatchScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("原料成本", color = TextSecondary)
+                        Text("原料成本", color = Foggy)
                         Text(
                             "¥%,.2f".format(totalMaterialCost),
                             fontWeight = FontWeight.SemiBold
@@ -171,7 +263,7 @@ fun NewBatchScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("加工费", color = TextSecondary)
+                        Text("加工费", color = Foggy)
                         Text("¥%,.2f".format(processingCost.toDoubleOrNull() ?: 0.0))
                     }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -183,7 +275,7 @@ fun NewBatchScreen(
                         Text(
                             "¥%,.2f".format(totalMaterialCost + (processingCost.toDoubleOrNull() ?: 0.0)),
                             fontWeight = FontWeight.Bold,
-                            color = AirbnbRed
+                            color = Rausch
                         )
                     }
                 }
@@ -193,13 +285,22 @@ fun NewBatchScreen(
                 onClick = {
                     val weight = sampleWeight.toDoubleOrNull() ?: return@Button
                     if (batchName.isNotBlank() && weight > 0) {
-                        viewModel.saveBatch(
-                            productId = productId,
-                            batchName = batchName,
-                            sampleWeight = weight,
-                            processingCost = processingCost.toDoubleOrNull() ?: 0.0,
-                            note = note
-                        )
+                        if (isEdit) {
+                            viewModel.updateBatch(
+                                batchName = batchName,
+                                sampleWeight = weight,
+                                processingCost = processingCost.toDoubleOrNull() ?: 0.0,
+                                note = note
+                            )
+                        } else {
+                            viewModel.saveBatch(
+                                productId = productId,
+                                batchName = batchName,
+                                sampleWeight = weight,
+                                processingCost = processingCost.toDoubleOrNull() ?: 0.0,
+                                note = note
+                            )
+                        }
                         onNavigateBack()
                     }
                 },
@@ -207,10 +308,17 @@ fun NewBatchScreen(
                     .fillMaxWidth()
                     .height(52.dp),
                 enabled = batchName.isNotBlank() && (sampleWeight.toDoubleOrNull() ?: 0.0) > 0,
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AirbnbRed)
+                shape = ButtonShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Rausch,
+                    disabledContainerColor = RauschDisabled
+                )
             ) {
-                Text("保存批次", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text(
+                    if (isEdit) "保存修改" else "保存批次",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                )
             }
         }
     }
@@ -236,6 +344,36 @@ fun NewBatchScreen(
             },
             onCreateIngredient = { name, category, price ->
                 viewModel.saveIngredient(name, category, price)
+            },
+            onOcrScan = {
+                showOcrSource = true
+            }
+        )
+    }
+
+    // OCR 图片来源选择对话框
+    if (showOcrSource) {
+        AlertDialog(
+            onDismissRequest = { showOcrSource = false },
+            title = { Text("识别配料表") },
+            text = { Text("选择图片来源，识别配料表上的文字并快速创建配料") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showOcrSource = false
+                        pickImageLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
+                ) { Text("从相册选择") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showOcrSource = false
+                        openCamera()
+                    }
+                ) { Text("拍照") }
             }
         )
     }
@@ -260,22 +398,22 @@ private fun IngredientRow(
             Text(
                 ingredient.ingredientName,
                 fontWeight = FontWeight.Medium,
-                color = TextPrimary
+                color = Ink
             )
             Text(
                 "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg",
                 fontSize = 12.sp,
-                color = TextSecondary
+                color = Foggy
             )
         }
         Text(
             "¥${"%.2f".format(ingredient.totalCost)}",
             fontWeight = FontWeight.SemiBold,
-            color = TextPrimary
+            color = Ink
         )
         IconButton(onClick = onDelete) {
             Icon(
-                Icons.Default.Delete,
+                Delete,
                 "删除",
                 tint = DangerRed,
                 modifier = Modifier.size(18.dp)
@@ -289,7 +427,7 @@ private fun IngredientRow(
 
 /**
  * 原料选择器底部抽屉
- * 支持从原料库选择，或快速添加新原料入库
+ * 支持从原料库选择、快速添加新原料入库、OCR 拍照识别配料表
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -297,7 +435,8 @@ fun IngredientPickerSheet(
     ingredients: List<Ingredient>,
     onDismiss: () -> Unit,
     onPick: (Ingredient, Double, Double) -> Unit,
-    onCreateIngredient: (String, String, Double) -> Unit = { _, _, _ -> }
+    onCreateIngredient: (String, String, Double) -> Unit = { _, _, _ -> },
+    onOcrScan: () -> Unit = {}
 ) {
     var selected by remember { mutableStateOf<Ingredient?>(null) }
     var weight by remember { mutableStateOf("") }
@@ -319,12 +458,23 @@ fun IngredientPickerSheet(
         ) {
             Text("选择原料", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
+            // OCR 识别入口
+            OutlinedButton(
+                onClick = onOcrScan,
+                modifier = Modifier.fillMaxWidth(),
+                shape = PillShape
+            ) {
+                Icon(Camera, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("拍照识别配料表")
+            }
+
             if (ingredients.isEmpty() || showQuickAdd) {
                 // 快速添加原料入库
                 Text(
                     if (ingredients.isEmpty()) "原料库为空，先添加一种原料" else "新原料入库",
                     fontSize = 13.sp,
-                    color = TextSecondary
+                    color = Foggy
                 )
                 OutlinedTextField(
                     value = newName,
@@ -370,7 +520,7 @@ fun IngredientPickerSheet(
                         },
                         enabled = newName.isNotBlank(),
                         modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = AirbnbRed)
+                        colors = ButtonDefaults.buttonColors(containerColor = Rausch)
                     ) { Text("入库") }
                 }
             } else {
@@ -384,10 +534,10 @@ fun IngredientPickerSheet(
                         Card(
                             onClick = { selected = ingredient },
                             modifier = Modifier.fillMaxWidth(),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            shape = ButtonShape,
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isSelected)
-                                    AirbnbRedLight else MaterialTheme.colorScheme.surface
+                                    RauschDisabled else MaterialTheme.colorScheme.surface
                             )
                         ) {
                             Row(
@@ -401,14 +551,14 @@ fun IngredientPickerSheet(
                                             Text(
                                                 ingredient.category,
                                                 fontSize = 11.sp,
-                                                color = TextSecondary
+                                                color = Foggy
                                             )
                                         }
                                         if (ingredient.unitPrice > 0) {
                                             Text(
                                                 " · ¥${"%.2f".format(ingredient.unitPrice)}/kg",
                                                 fontSize = 11.sp,
-                                                color = TextSecondary
+                                                color = Foggy
                                             )
                                         }
                                     }
@@ -421,7 +571,7 @@ fun IngredientPickerSheet(
                     onClick = { showQuickAdd = true },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                    Icon(Add, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("新原料入库")
                 }
@@ -461,7 +611,7 @@ fun IngredientPickerSheet(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = (weight.toDoubleOrNull() ?: 0.0) > 0 && (price.toDoubleOrNull() ?: 0.0) > 0,
-                        colors = ButtonDefaults.buttonColors(containerColor = AirbnbRed)
+                        colors = ButtonDefaults.buttonColors(containerColor = Rausch)
                     ) {
                         Text("添加")
                     }

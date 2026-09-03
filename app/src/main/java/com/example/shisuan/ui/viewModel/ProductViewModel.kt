@@ -2,6 +2,7 @@ package com.example.shisuan.ui.viewModel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.shisuan.core.ocr.OcrAnalyzer
 import com.example.shisuan.data.database.*
 import com.example.shisuan.data.repository.CostRepository
 import com.example.shisuan.domain.model.CostResult
@@ -23,13 +24,19 @@ class ProductViewModel @Inject constructor(
     val products: StateFlow<List<Product>> = 
         repo.allProducts.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     
-    fun saveProduct(name: String, category: String = "", description: String = "") {
+    fun saveProduct(
+        name: String, category: String = "", description: String = "",
+        weightPerBoxGram: Double = 5000.0, packagesPerBox: Int = 20
+    ) {
         viewModelScope.launch {
             repo.saveProduct(
                 Product(
                     name = name,
                     category = category,
-                    description = description
+                    description = description,
+                    weightPerBoxGram = weightPerBoxGram,
+                    packagesPerBox = packagesPerBox,
+                    weightPerPackageGram = weightPerBoxGram / packagesPerBox
                 )
             )
         }
@@ -66,38 +73,32 @@ class ProductDetailViewModel @Inject constructor(
         else repo.getBatchesByProduct(id)
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     
-    val unitConfig: StateFlow<UnitConfig?> = 
+    val unitConfig: StateFlow<UnitConfig?> =
         repo.unitConfig.stateIn(viewModelScope, SharingStarted.Lazily, null)
-    
+
     /**
      * 预计算：批次 + 成本结果
-     * 未配置换算参数时使用默认值（5000g/箱，20包/箱），保证批次始终可见
+     * 使用产品级包装规格（Product.weightPerBoxGram/packagesPerBox），
+     * 不再依赖全局 UnitConfig（向后兼容保留）
      */
     val batchesWithCost: StateFlow<List<BatchWithCostUI>> =
-        combine(batches, unitConfig, repo.allProducts) { bs, cfg, _ ->
-            val effectiveCfg = cfg ?: UnitConfig(
-                id = 0,
-                weightPerBoxGram = 5000.0,
-                packagesPerBox = 20,
-                weightPerPackageGram = 250.0
-            )
+        combine(batches, product, repo.allProducts) { bs, prod, _ ->
+            // 产品级包装规格，未加载时用默认值
+            val boxGram = prod?.weightPerBoxGram ?: 5000.0
+            val pkgBox = prod?.packagesPerBox ?: 20
 
             bs.mapIndexed { index, batch ->
-                // 获取原料明细并计算总成本
                 val ingredients = repo.getBatchIngredients(batch.id).first()
                 val materialCost = ingredients.sumOf { it.totalCost }
-                val totalCost = materialCost + batch.processingCost
 
-                // 计算成本结果
                 val result = CostCalculator.calculate(
                     sampleWeightGram = batch.sampleWeightGram,
                     materialCost = materialCost,
                     processingCost = batch.processingCost,
-                    weightPerBoxGram = effectiveCfg.weightPerBoxGram,
-                    packagesPerBox = effectiveCfg.packagesPerBox
+                    weightPerBoxGram = boxGram,
+                    packagesPerBox = pkgBox
                 )
 
-                // 计算上一批次差异
                 val prev = bs.getOrNull(index + 1)
                 val prevTonCost = if (prev != null) {
                     val prevIngredients = repo.getBatchIngredients(prev.id).first()
@@ -106,8 +107,8 @@ class ProductDetailViewModel @Inject constructor(
                         prev.sampleWeightGram,
                         prevMaterialCost,
                         prev.processingCost,
-                        effectiveCfg.weightPerBoxGram,
-                        effectiveCfg.packagesPerBox
+                        boxGram,
+                        pkgBox
                     ).unitCostPerTon
                 } else null
 
@@ -129,7 +130,8 @@ class ProductDetailViewModel @Inject constructor(
  */
 @HiltViewModel
 class NewBatchViewModel @Inject constructor(
-    private val repo: CostRepository
+    private val repo: CostRepository,
+    private val ocrAnalyzer: OcrAnalyzer
 ) : ViewModel() {
     
     private val _ingredients = MutableStateFlow<List<BatchIngredient>>(emptyList())
@@ -161,6 +163,41 @@ class NewBatchViewModel @Inject constructor(
             )
         }
     }
+
+    /**
+     * OCR 批量入库：识别出的配料名列表全部加入原料库
+     */
+    fun saveIngredientBatch(names: List<String>, category: String = "") {
+        viewModelScope.launch {
+            names.forEach { name ->
+                repo.saveIngredient(
+                    Ingredient(name = name, category = category, priceUnit = "元/kg")
+                )
+            }
+        }
+    }
+
+    /** OCR 扫描状态 */
+    private val _ocrScanning = MutableStateFlow(false)
+    val ocrScanning: StateFlow<Boolean> = _ocrScanning.asStateFlow()
+
+    /**
+     * OCR 识别配料表图片，识别结果批量入库
+     */
+    fun recognizeIngredients(uri: android.net.Uri, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            _ocrScanning.value = true
+            try {
+                val names = ocrAnalyzer.recognizeIngredientNames(uri)
+                if (names.isNotEmpty()) {
+                    saveIngredientBatch(names)
+                }
+            } finally {
+                _ocrScanning.value = false
+                onDone()
+            }
+        }
+    }
     
     fun removeIngredient(ingredient: BatchIngredient) {
         _ingredients.value = _ingredients.value - ingredient
@@ -186,7 +223,69 @@ class NewBatchViewModel @Inject constructor(
                 note = note
             )
             repo.saveBatchWithIngredients(batch, _ingredients.value)
-            _ingredients.value = emptyList() // 清空
+            _ingredients.value = emptyList()
+        }
+    }
+
+    // ─────────── 批次编辑 ───────────
+
+    private val _editBatchId = MutableStateFlow<Long?>(null)
+    val editBatchId: StateFlow<Long?> = _editBatchId.asStateFlow()
+
+    /** 编辑模式：批次信息草稿 */
+    private val _editBatchInfo = MutableStateFlow<BatchRecord?>(null)
+    val editBatchInfo: StateFlow<BatchRecord?> = _editBatchInfo.asStateFlow()
+
+    val isEditMode: Boolean get() = _editBatchId.value != null
+
+    /**
+     * 加载现有批次到草稿态用于编辑
+     */
+    fun loadBatchForEdit(batchId: Long) {
+        _editBatchId.value = batchId
+        viewModelScope.launch {
+            val batch = repo.getBatchById(batchId).first()
+            _editBatchInfo.value = batch
+            if (batch != null) {
+                val ings = repo.getBatchIngredients(batchId).first()
+                _ingredients.value = ings
+            }
+        }
+    }
+
+    fun clearEditMode() {
+        _editBatchId.value = null
+        _editBatchInfo.value = null
+        _ingredients.value = emptyList()
+    }
+
+    /**
+     * 更新批次：替换批次记录 + 全量替换原料明细
+     */
+    fun updateBatch(
+        batchName: String,
+        sampleWeight: Double,
+        processingCost: Double,
+        note: String
+    ) {
+        val batchId = _editBatchId.value ?: return
+        val existing = _editBatchInfo.value ?: return
+        viewModelScope.launch {
+            val updated = existing.copy(
+                batchName = batchName,
+                sampleWeightGram = sampleWeight,
+                processingCost = processingCost,
+                note = note,
+                updatedAt = System.currentTimeMillis()
+            )
+            repo.updateBatch(updated)
+            // 全量替换原料明细：先删后插
+            repo.deleteBatchIngredientsByBatchId(batchId)
+            val newIngredients = _ingredients.value.map { it.copy(batchId = batchId, id = 0) }
+            newIngredients.forEach { repo.addIngredientToBatch(it) }
+            _ingredients.value = emptyList()
+            _editBatchId.value = null
+            _editBatchInfo.value = null
         }
     }
 }

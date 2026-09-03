@@ -92,8 +92,11 @@ class CostRepository(private val db: CostCalDatabase) {
     suspend fun updateBatchIngredient(ingredient: BatchIngredient) = 
         db.batchIngredientDao().update(ingredient)
     
-    suspend fun deleteBatchIngredient(ingredient: BatchIngredient) = 
+    suspend fun deleteBatchIngredient(ingredient: BatchIngredient) =
         db.batchIngredientDao().delete(ingredient)
+
+    suspend fun deleteBatchIngredientsByBatchId(batchId: Long) =
+        db.batchIngredientDao().deleteByBatch(batchId)
     
     // ============ Ingredient 原料库 ============
     

@@ -1,22 +1,65 @@
 package com.example.shisuan.ui.theme
 
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
 
-val AirbnbRed = Color(0xFFE8345B)
-val AirbnbRedDark = Color(0xFFC41230)
-val AirbnbRedLight = Color(0xFFFFE0E6)
-val BackgroundCream = Color(0xFFF8F7F4)
-val SurfaceWhite = Color(0xFFFFFFFF)
-val InputGray = Color(0xFFF2F2F0)
-val DividerGray = Color(0xFFE5E5E0)
-val TextPrimary = Color(0xFF1A1A1A)
-val TextSecondary = Color(0xFF6B6B6B)
-val TextTertiary = Color(0xFF999999)
-val BorderDark = Color(0xFF2D2D2D)
-val BorderLight = Color(0xFFD0D0CC)
+// ─────────── 品牌色板 ───────────
+
+/** 主色 Rausch — 仅用于主行动按钮（FAB、保存、入库、添加） */
+val Rausch = Color(0xFFFF385C)
+
+/** 主色激活态 — 按下状态 */
+val RauschPressed = Color(0xFFE00B41)
+
+/** 主色禁用态 — 禁用按钮背景 */
+val RauschDisabled = Color(0xFFFFD1DA)
+
+// ─────────── 文字色 ───────────
+
+/** Ink — 主标题 */
+val Ink = Color(0xFF222222)
+
+/** Body — 正文 */
+val Body = Color(0xFF3F3F3F)
+
+/** Foggy — 辅助文字 */
+val Foggy = Color(0xFF767676)
+
+// ─────────── 背景色 ───────────
+
+/** Canvas — 页面背景 */
+val Canvas = Color(0xFFFFFFFF)
+
+/** SoftBg — 卡片/区域背景 */
+val SoftBg = Color(0xFFF7F7F7)
+
+// ─────────── 语义色 ───────────
+
+/** 成本下降 */
 val SuccessGreen = Color(0xFF0A8754)
+
+/** 成本上升 */
 val WarningOrange = Color(0xFFE8830A)
+
+/** 删除/危险 */
 val DangerRed = Color(0xFFD00000)
-val InfoBlue = Color(0xFF2B6CB0)
-val PrimaryRed = Color(0xFFE8345B)
+
+// ─────────── MaterialTheme ColorScheme ───────────
+
+val ShisuanColorScheme = lightColorScheme(
+    primary = Rausch,
+    onPrimary = Color.White,
+    primaryContainer = RauschDisabled,
+    onPrimaryContainer = RauschPressed,
+    secondary = Rausch,
+    onSecondary = Color.White,
+    surface = Canvas,
+    onSurface = Ink,
+    surfaceVariant = SoftBg,
+    onSurfaceVariant = Foggy,
+    background = Canvas,
+    onBackground = Ink,
+    outline = SoftBg,
+    error = DangerRed,
+    onError = Color.White,
+)
