@@ -17,6 +17,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.data.database.Product
 import com.example.shisuan.ui.animation.entranceAnimation
 import com.example.shisuan.ui.animation.pressScale
+import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.theme.PrimaryRed
 import com.example.shisuan.ui.viewModel.ProductViewModel
@@ -122,14 +123,14 @@ fun ProductCard(
                     product.name,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF1A1A1A)
+                    color = TextPrimary
                 )
                 if (product.category.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         product.category,
                         fontSize = 13.sp,
-                        color = Color(0xFF6B6B6B)
+                        color = TextSecondary
                     )
                 }
             }
@@ -137,7 +138,7 @@ fun ProductCard(
             Icon(
                 imageVector = androidx.compose.material.icons.Icons.Default.Add,
                 contentDescription = null,
-                tint = Color(0xFFCCCCCC),
+                tint = BorderLight,
                 modifier = Modifier.size(20.dp)
             )
         }

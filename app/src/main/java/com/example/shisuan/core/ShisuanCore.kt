@@ -24,10 +24,22 @@ object ShisuanCore {
         try {
             System.loadLibrary(LIB_NAME)
             isLoaded = true
-            Log.i(TAG, "Rust 引擎加载成功: ${engineInfo()}")
+            log("Rust 引擎加载成功: ${engineInfo()}")
         } catch (e: UnsatisfiedLinkError) {
             isLoaded = false
-            Log.e(TAG, "Rust 引擎加载失败，将回退到 Kotlin 实现", e)
+            log("Rust 引擎加载失败，将回退到 Kotlin 实现", e)
+        }
+    }
+
+    /**
+     * 测试环境安全日志：单元测试中 android.util.Log 为 stub 实现，
+     * 直接调用会抛 RuntimeException，这里吞掉避免阻塞引擎降级路径。
+     */
+    private fun log(message: String, throwable: Throwable? = null) {
+        try {
+            if (throwable != null) Log.e(TAG, message, throwable) else Log.i(TAG, message)
+        } catch (_: Throwable) {
+            // 单元测试环境无 Log 实现，忽略
         }
     }
 

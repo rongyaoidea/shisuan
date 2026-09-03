@@ -71,26 +71,32 @@ class ProductDetailViewModel @Inject constructor(
     
     /**
      * 预计算：批次 + 成本结果
+     * 未配置换算参数时使用默认值（5000g/箱，20包/箱），保证批次始终可见
      */
-    val batchesWithCost: StateFlow<List<BatchWithCostUI>> = 
+    val batchesWithCost: StateFlow<List<BatchWithCostUI>> =
         combine(batches, unitConfig, repo.allProducts) { bs, cfg, _ ->
-            if (cfg == null) return@combine emptyList()
-            
+            val effectiveCfg = cfg ?: UnitConfig(
+                id = 0,
+                weightPerBoxGram = 5000.0,
+                packagesPerBox = 20,
+                weightPerPackageGram = 250.0
+            )
+
             bs.mapIndexed { index, batch ->
                 // 获取原料明细并计算总成本
                 val ingredients = repo.getBatchIngredients(batch.id).first()
                 val materialCost = ingredients.sumOf { it.totalCost }
                 val totalCost = materialCost + batch.processingCost
-                
+
                 // 计算成本结果
                 val result = CostCalculator.calculate(
                     sampleWeightGram = batch.sampleWeightGram,
                     materialCost = materialCost,
                     processingCost = batch.processingCost,
-                    weightPerBoxGram = cfg.weightPerBoxGram,
-                    packagesPerBox = cfg.packagesPerBox
+                    weightPerBoxGram = effectiveCfg.weightPerBoxGram,
+                    packagesPerBox = effectiveCfg.packagesPerBox
                 )
-                
+
                 // 计算上一批次差异
                 val prev = bs.getOrNull(index + 1)
                 val prevTonCost = if (prev != null) {
@@ -100,13 +106,13 @@ class ProductDetailViewModel @Inject constructor(
                         prev.sampleWeightGram,
                         prevMaterialCost,
                         prev.processingCost,
-                        cfg.weightPerBoxGram,
-                        cfg.packagesPerBox
+                        effectiveCfg.weightPerBoxGram,
+                        effectiveCfg.packagesPerBox
                     ).unitCostPerTon
                 } else null
-                
+
                 val diff = CostCalculator.calcDifferential(result.unitCostPerTon, prevTonCost)
-                
+
                 BatchWithCostUI(batch, ingredients, materialCost, result, diff)
             }
         }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -138,6 +144,22 @@ class NewBatchViewModel @Inject constructor(
     
     fun addIngredient(ingredient: BatchIngredient) {
         _ingredients.value = _ingredients.value + ingredient
+    }
+
+    /**
+     * 快速添加原料入库（新建批次页的原料选择器内）
+     */
+    fun saveIngredient(name: String, category: String, unitPricePerKg: Double) {
+        viewModelScope.launch {
+            repo.saveIngredient(
+                Ingredient(
+                    name = name,
+                    category = category,
+                    unitPrice = unitPricePerKg,
+                    priceUnit = "元/kg"
+                )
+            )
+        }
     }
     
     fun removeIngredient(ingredient: BatchIngredient) {

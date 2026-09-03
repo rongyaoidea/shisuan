@@ -5,7 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,9 +16,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.ui.animation.entranceAnimation
-import com.example.shisuan.ui.animation.pressScale
-import com.example.shisuan.data.database.BatchRecord
+import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
+import com.example.shisuan.ui.viewModel.BatchWithCostUI
 import com.example.shisuan.ui.viewModel.ProductDetailViewModel
 
 /**
@@ -51,7 +51,7 @@ fun ProductDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -62,7 +62,7 @@ fun ProductDetailScreen(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onNavigateToNewBatch(productId) },
-                containerColor = Color(0xFFE8345B)
+                containerColor = AirbnbRed
             ) {
                 Icon(Icons.Default.Add, "新建批次", tint = Color.White)
             }
@@ -92,14 +92,13 @@ fun ProductDetailScreen(
  */
 @Composable
 fun BatchCard(
-    item: com.example.shisuan.ui.viewModel.BatchWithCostUI,
+    item: BatchWithCostUI,
     index: Int
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .pressScale()
             .entranceAnimation(index = index),
         shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -111,15 +110,15 @@ fun BatchCard(
                     item.batch.batchName,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF1A1A1A)
+                    color = TextPrimary
                 )
                 Spacer(Modifier.weight(1f))
                 // 差异显示
                 item.differential?.let { diff ->
                     val color = when {
-                        diff.diffPercent < -0.1 -> Color(0xFF0A8754)
-                        diff.diffPercent > 0.1 -> Color(0xFFE8830A)
-                        else -> Color(0xFF999999)
+                        diff.diffPercent < -0.1 -> SuccessGreen
+                        diff.diffPercent > 0.1 -> WarningOrange
+                        else -> TextTertiary
                     }
                     Text(
                         if (diff.diffPercent > 0) "↑ ${"%.1f".format(diff.diffPercent)}%" 
@@ -147,7 +146,7 @@ fun BatchCard(
 @Composable
 private fun CostCell(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 11.sp, color = Color(0xFF6B6B6B))
-        Text(value, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF1A1A1A))
+        Text(label, fontSize = 11.sp, color = TextSecondary)
+        Text(value, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
     }
 }
