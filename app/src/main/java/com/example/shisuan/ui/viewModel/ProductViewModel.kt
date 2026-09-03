@@ -26,7 +26,7 @@ class ProductViewModel @Inject constructor(
     
     fun saveProduct(
         name: String, category: String = "", description: String = "",
-        weightPerBoxGram: Double = 5000.0, packagesPerBox: Int = 20
+        packagesPerBox: Int = 20, weightPerPackageGram: Double = 250.0
     ) {
         viewModelScope.launch {
             repo.saveProduct(
@@ -34,9 +34,10 @@ class ProductViewModel @Inject constructor(
                     name = name,
                     category = category,
                     description = description,
-                    weightPerBoxGram = weightPerBoxGram,
+                    // 每箱克数 = 每箱包数 × 每包克数，无需用户手算
+                    weightPerBoxGram = packagesPerBox * weightPerPackageGram,
                     packagesPerBox = packagesPerBox,
-                    weightPerPackageGram = weightPerBoxGram / packagesPerBox
+                    weightPerPackageGram = weightPerPackageGram
                 )
             )
         }
@@ -52,6 +53,7 @@ class ProductViewModel @Inject constructor(
 /**
  * 产品详情 ViewModel - 显示某产品的所有批次
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ProductDetailViewModel @Inject constructor(
     private val repo: CostRepository
@@ -68,53 +70,50 @@ class ProductDetailViewModel @Inject constructor(
         else repo.getProductById(id)
     }.stateIn(viewModelScope, SharingStarted.Lazily, null)
     
-    val batches: StateFlow<List<BatchRecord>> = _productId.flatMapLatest { id ->
-        if (id == null) flowOf(emptyList())
-        else repo.getBatchesByProduct(id)
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-    
-    val unitConfig: StateFlow<UnitConfig?> =
-        repo.unitConfig.stateIn(viewModelScope, SharingStarted.Lazily, null)
-
     /**
      * 预计算：批次 + 成本结果
      * 使用产品级包装规格（Product.weightPerBoxGram/packagesPerBox），
      * 不再依赖全局 UnitConfig（向后兼容保留）
+     *
+     * 每次批次/产品流发射时实时重查原料明细（不缓存），
+     * 保证「先改批次再删插原料」的编辑链路成本计算不读到空数据。
      */
     val batchesWithCost: StateFlow<List<BatchWithCostUI>> =
-        combine(batches, product, repo.allProducts) { bs, prod, _ ->
-            // 产品级包装规格，未加载时用默认值
-            val boxGram = prod?.weightPerBoxGram ?: 5000.0
-            val pkgBox = prod?.packagesPerBox ?: 20
+        _productId.flatMapLatest { id ->
+            if (id == null) flowOf(emptyList())
+            else {
+                combine(repo.getBatchesByProduct(id), repo.getProductById(id)) { bs, prod ->
+                    val boxGram = prod?.weightPerBoxGram ?: 5000.0
+                    val pkgBox = prod?.packagesPerBox ?: 20
 
-            bs.mapIndexed { index, batch ->
-                val ingredients = repo.getBatchIngredients(batch.id).first()
-                val materialCost = ingredients.sumOf { it.totalCost }
+                    bs.mapIndexed { index, batch ->
+                        val ingredients = repo.getBatchIngredients(batch.id).first()
+                        val materialCost = ingredients.sumOf { it.totalCost }
 
-                val result = CostCalculator.calculate(
-                    sampleWeightGram = batch.sampleWeightGram,
-                    materialCost = materialCost,
-                    processingCost = batch.processingCost,
-                    weightPerBoxGram = boxGram,
-                    packagesPerBox = pkgBox
-                )
+                        val result = CostCalculator.calculate(
+                            sampleWeightGram = batch.sampleWeightGram,
+                            materialCost = materialCost,
+                            weightPerBoxGram = boxGram,
+                            packagesPerBox = pkgBox
+                        )
 
-                val prev = bs.getOrNull(index + 1)
-                val prevTonCost = if (prev != null) {
-                    val prevIngredients = repo.getBatchIngredients(prev.id).first()
-                    val prevMaterialCost = prevIngredients.sumOf { it.totalCost }
-                    CostCalculator.calculate(
-                        prev.sampleWeightGram,
-                        prevMaterialCost,
-                        prev.processingCost,
-                        boxGram,
-                        pkgBox
-                    ).unitCostPerTon
-                } else null
+                        val prev = bs.getOrNull(index + 1)
+                        val prevTonCost = if (prev != null) {
+                            val prevIngredients = repo.getBatchIngredients(prev.id).first()
+                            val prevMaterialCost = prevIngredients.sumOf { it.totalCost }
+                            CostCalculator.calculate(
+                                prev.sampleWeightGram,
+                                prevMaterialCost,
+                                boxGram,
+                                pkgBox
+                            ).unitCostPerTon
+                        } else null
 
-                val diff = CostCalculator.calcDifferential(result.unitCostPerTon, prevTonCost)
+                        val diff = CostCalculator.calcDifferential(result.unitCostPerTon, prevTonCost)
 
-                BatchWithCostUI(batch, ingredients, materialCost, result, diff)
+                        BatchWithCostUI(batch, ingredients, materialCost, result, diff)
+                    }
+                }
             }
         }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
     
@@ -209,22 +208,36 @@ class NewBatchViewModel @Inject constructor(
     
     fun saveBatch(
         productId: Long,
-        batchName: String,
+        batchDate: String, // 批次日期 yyyy-MM-dd，批次名自动生成为 日期-序号
         sampleWeight: Double,
-        processingCost: Double,
         note: String
     ) {
         viewModelScope.launch {
+            val batchName = generateBatchName(productId, batchDate)
             val batch = BatchRecord(
                 productId = productId,
                 batchName = batchName,
                 sampleWeightGram = sampleWeight,
-                processingCost = processingCost,
                 note = note
             )
             repo.saveBatchWithIngredients(batch, _ingredients.value)
             _ingredients.value = emptyList()
         }
+    }
+
+    /**
+     * 生成批次名：日期 + 序号（如 2026-09-03-01）
+     * 序号 = 该产品同一日期下已有批次的最大序号 + 1
+     */
+    private suspend fun generateBatchName(productId: Long, date: String): String {
+        val prefix = "$date-"
+        val batches = repo.getBatchesByProduct(productId).first()
+        val maxSeq = batches.asSequence()
+            .map { it.batchName }
+            .filter { it.startsWith(prefix) }
+            .mapNotNull { it.removePrefix(prefix).toIntOrNull() }
+            .maxOrNull() ?: 0
+        return "$prefix${(maxSeq + 1).toString().padStart(2, '0')}"
     }
 
     // ─────────── 批次编辑 ───────────
@@ -236,7 +249,26 @@ class NewBatchViewModel @Inject constructor(
     private val _editBatchInfo = MutableStateFlow<BatchRecord?>(null)
     val editBatchInfo: StateFlow<BatchRecord?> = _editBatchInfo.asStateFlow()
 
+    /** 自动生成的批次名预览（日期+序号） */
+    private val _batchNamePreview = MutableStateFlow("")
+    val batchNamePreview: StateFlow<String> = _batchNamePreview.asStateFlow()
+
     val isEditMode: Boolean get() = _editBatchId.value != null
+
+    /**
+     * 刷新批次名预览（选择日期或进入编辑时调用）
+     * 编辑模式且日期未变时，保持原名
+     */
+    fun refreshBatchNamePreview(productId: Long, date: String) {
+        viewModelScope.launch {
+            val existing = _editBatchInfo.value
+            if (existing != null && existing.batchName.take(10) == date) {
+                _batchNamePreview.value = existing.batchName
+            } else {
+                _batchNamePreview.value = generateBatchName(productId, date)
+            }
+        }
+    }
 
     /**
      * 加载现有批次到草稿态用于编辑
@@ -261,20 +293,25 @@ class NewBatchViewModel @Inject constructor(
 
     /**
      * 更新批次：替换批次记录 + 全量替换原料明细
+     * @param batchDate 日期 yyyy-MM-dd；与原名日期相同时保留原序号
      */
     fun updateBatch(
-        batchName: String,
+        batchDate: String,
         sampleWeight: Double,
-        processingCost: Double,
         note: String
     ) {
         val batchId = _editBatchId.value ?: return
         val existing = _editBatchInfo.value ?: return
         viewModelScope.launch {
+            val oldDate = existing.batchName.take(10)
+            val batchName = if (oldDate == batchDate) {
+                existing.batchName // 日期未变，保留原批次名
+            } else {
+                generateBatchName(existing.productId, batchDate)
+            }
             val updated = existing.copy(
                 batchName = batchName,
                 sampleWeightGram = sampleWeight,
-                processingCost = processingCost,
                 note = note,
                 updatedAt = System.currentTimeMillis()
             )

@@ -44,9 +44,8 @@ data class Product(
 data class BatchRecord(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val productId: Long, // 外键：关联到 Product
-    val batchName: String, // 批次编号
+    val batchName: String, // 批次编号（日期+序号，如 2026-09-03-01）
     val sampleWeightGram: Double, // 样品重量(g)
-    val processingCost: Double = 0.0, // 加工费
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

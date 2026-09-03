@@ -87,13 +87,13 @@ fun ProductListScreen(
     if (showNewProductDialog) {
         NewProductDialog(
             onDismiss = { showNewProductDialog = false },
-            onSave = { name, category, desc, boxGram, pkgBox ->
+            onSave = { name, category, desc, pkgBox, pkgGram ->
                 viewModel.saveProduct(
                     name = name,
                     category = category,
                     description = desc,
-                    weightPerBoxGram = boxGram,
-                    packagesPerBox = pkgBox
+                    packagesPerBox = pkgBox,
+                    weightPerPackageGram = pkgGram
                 )
                 showNewProductDialog = false
             }
@@ -165,18 +165,23 @@ fun ProductCard(
 
 /**
  * 新建产品对话框 - 含包装规格设置
+ * 包装规格输入：每箱包数 + 每包克数，每箱克数自动计算
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewProductDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Double, Int) -> Unit
+    onSave: (String, String, String, Int, Double) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var boxGram by remember { mutableStateOf("5000") }
     var pkgBox by remember { mutableStateOf("20") }
+    var pkgGram by remember { mutableStateOf("250") }
+
+    val pkgBoxNum = pkgBox.toIntOrNull() ?: 0
+    val pkgGramNum = pkgGram.toDoubleOrNull() ?: 0.0
+    val boxGramComputed = pkgBoxNum * pkgGramNum
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -207,14 +212,6 @@ fun NewProductDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedTextField(
-                        value = boxGram,
-                        onValueChange = { boxGram = it },
-                        label = { Text("每箱克数 (g)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
                         value = pkgBox,
                         onValueChange = { pkgBox = it },
                         label = { Text("每箱包数") },
@@ -222,7 +219,20 @@ fun NewProductDialog(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f)
                     )
+                    OutlinedTextField(
+                        value = pkgGram,
+                        onValueChange = { pkgGram = it },
+                        label = { Text("每包克数 (g)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f)
+                    )
                 }
+                Text(
+                    "每箱克数 = $pkgBoxNum × $pkgGramNum = ${"%.0f".format(boxGramComputed)} g（自动计算）",
+                    fontSize = 12.sp,
+                    color = Foggy
+                )
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
@@ -238,8 +248,8 @@ fun NewProductDialog(
                     if (name.isNotBlank()) {
                         onSave(
                             name, category, description,
-                            boxGram.toDoubleOrNull() ?: 5000.0,
-                            pkgBox.toIntOrNull() ?: 20
+                            pkgBox.toIntOrNull() ?: 20,
+                            pkgGram.toDoubleOrNull() ?: 250.0
                         )
                     }
                 },

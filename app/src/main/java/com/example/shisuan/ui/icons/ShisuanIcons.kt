@@ -329,3 +329,38 @@ val Jar: ImageVector
         return _jar!!
     }
 private var _jar: ImageVector? = null
+
+/** 日历（批次日期选择） */
+val Calendar: ImageVector
+    get() {
+        if (_calendar != null) return _calendar!!
+        _calendar = ImageVector.Builder(
+            name = "ShisuanCalendar", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(4f, 6f)
+                horizontalLineTo(20f)
+                verticalLineTo(20f)
+                horizontalLineTo(4f)
+                close()
+                moveTo(7f, 3f)
+                verticalLineTo(8f)
+                moveTo(17f, 3f)
+                verticalLineTo(8f)
+                moveTo(4f, 11f)
+                horizontalLineTo(20f)
+                moveTo(8f, 15f)
+                verticalLineTo(17f)
+                moveTo(12f, 15f)
+                verticalLineTo(17f)
+                moveTo(16f, 15f)
+                verticalLineTo(17f)
+            }
+        }.build()
+        return _calendar!!
+    }
+private var _calendar: ImageVector? = null

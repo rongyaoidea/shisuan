@@ -24,7 +24,7 @@ object CostCalculator {
     )
 
     /**
-     * 核心换算：
+     * 核心换算（纯物料成本，无加工费）：
      * 克单价 = 总成本 / 样品重量
      * 吨价   = 克单价 × 1,000,000
      * 箱价   = 克单价 × 每箱克数
@@ -33,14 +33,14 @@ object CostCalculator {
     fun calculate(
         sampleWeightGram: Double,
         materialCost: Double,
-        processingCost: Double = 0.0,
         weightPerBoxGram: Double,
         packagesPerBox: Int
     ): CostResult {
         if (rustAvailable) {
             val out = DoubleArray(5)
+            // 纯物料成本模式：加工费恒为 0（Rust 引擎接口保留，传 0.0）
             val code = ShisuanCore.calculate(
-                sampleWeightGram, materialCost, processingCost,
+                sampleWeightGram, materialCost, 0.0,
                 weightPerBoxGram, packagesPerBox, out
             )
             if (code == 0) {
@@ -49,7 +49,7 @@ object CostCalculator {
             // Rust 返回无效参数时回退到 Kotlin 计算（保持行为一致）
         }
         return calculateKotlin(
-            sampleWeightGram, materialCost, processingCost,
+            sampleWeightGram, materialCost,
             weightPerBoxGram, packagesPerBox
         )
     }
@@ -103,14 +103,13 @@ object CostCalculator {
     private fun calculateKotlin(
         sampleWeightGram: Double,
         materialCost: Double,
-        processingCost: Double,
         weightPerBoxGram: Double,
         packagesPerBox: Int
     ): CostResult {
         if (sampleWeightGram <= 0.0 || weightPerBoxGram <= 0.0 || packagesPerBox <= 0) {
             return CostResult(0.0, 0.0, 0.0, 0.0, 0.0)
         }
-        val totalCost = materialCost + processingCost
+        val totalCost = materialCost
         val unitCostPerGram = totalCost / sampleWeightGram
         val unitCostPerTon = unitCostPerGram * 1_000_000.0
         val boxesPerTon = 1_000_000.0 / weightPerBoxGram

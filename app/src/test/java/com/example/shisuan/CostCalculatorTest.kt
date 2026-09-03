@@ -16,27 +16,26 @@ class CostCalculatorTest {
 
     @Test
     fun `基础成本换算`() {
-        // 样品10g，原料成本5元，加工费1元，每箱5000g，每箱20包
+        // 样品10g，原料成本5元（纯物料），每箱5000g，每箱20包
         val r = CostCalculator.calculate(
             sampleWeightGram = 10.0,
             materialCost = 5.0,
-            processingCost = 1.0,
             weightPerBoxGram = 5000.0,
             packagesPerBox = 20
         )
-        assertEquals(0.6, r.unitCostPerGram, 0.001)   // 6/10
-        assertEquals(600_000.0, r.unitCostPerTon, 0.01)
+        assertEquals(0.5, r.unitCostPerGram, 0.001)   // 5/10
+        assertEquals(500_000.0, r.unitCostPerTon, 0.01)
         assertEquals(200.0, r.boxesPerTon, 0.01)
-        assertEquals(3000.0, r.costPerBox, 0.01)
-        assertEquals(150.0, r.costPerPackage, 0.01)
+        assertEquals(2500.0, r.costPerBox, 0.01)
+        assertEquals(125.0, r.costPerPackage, 0.01)
     }
 
     @Test
     fun `非法输入返回全零`() {
-        val r = CostCalculator.calculate(0.0, 5.0, 1.0, 5000.0, 20)
+        val r = CostCalculator.calculate(0.0, 5.0, 5000.0, 20)
         assertEquals(CostResult(0.0, 0.0, 0.0, 0.0, 0.0), r)
 
-        val r2 = CostCalculator.calculate(10.0, 5.0, 1.0, 0.0, 20)
+        val r2 = CostCalculator.calculate(10.0, 5.0, 0.0, 20)
         assertEquals(0.0, r2.costPerBox, 0.0)
     }
 

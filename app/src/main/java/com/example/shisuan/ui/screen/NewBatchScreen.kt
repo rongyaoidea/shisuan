@@ -1,6 +1,10 @@
 package com.example.shisuan.ui.screen
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.net.Uri
+import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +29,7 @@ import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.icons.Add
 import com.example.shisuan.ui.icons.ArrowBack
+import com.example.shisuan.ui.icons.Calendar
 import com.example.shisuan.ui.icons.Camera
 import com.example.shisuan.ui.icons.Delete
 import com.example.shisuan.ui.icons.Edit
@@ -53,9 +58,9 @@ fun NewBatchScreen(
 ) {
     val isEdit = editBatchId != null
 
-    var batchName by remember { mutableStateOf("") }
+    var batchDateMillis by remember { mutableStateOf<Long?>(null) } // 批次日期（UTC 毫秒）
+    var showDatePicker by remember { mutableStateOf(false) }
     var sampleWeight by remember { mutableStateOf("") }
-    var processingCost by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     var showIngredientPicker by remember { mutableStateOf(false) }
     var showOcrSource by remember { mutableStateOf(false) }
@@ -65,6 +70,7 @@ fun NewBatchScreen(
     val totalMaterialCost by viewModel.totalMaterialCost.collectAsState()
     val editBatchInfo by viewModel.editBatchInfo.collectAsState()
     val ocrScanning by viewModel.ocrScanning.collectAsState()
+    val batchNamePreview by viewModel.batchNamePreview.collectAsState()
 
     // 编辑模式：加载批次数据到草稿态
     LaunchedEffect(editBatchId) {
@@ -73,14 +79,21 @@ fun NewBatchScreen(
         }
     }
 
-    // 批次信息加载完成后预填表单
+    // 批次信息加载完成后预填表单（日期从批次名解析，批次名格式 yyyy-MM-dd-NN）
     LaunchedEffect(editBatchInfo) {
         val b = editBatchInfo
         if (b != null) {
-            batchName = b.batchName
             sampleWeight = b.sampleWeightGram.toString()
-            processingCost = if (b.processingCost > 0) b.processingCost.toString() else ""
             note = b.note
+            batchDateMillis = parseDateMillis(b.batchName) ?: toUtcDateMillis(b.createdAt)
+        }
+    }
+
+    // 日期变化时刷新自动生成的批次名
+    val batchDateStr = batchDateMillis?.let(::formatDateMillis)
+    LaunchedEffect(batchDateStr) {
+        if (!batchDateStr.isNullOrBlank()) {
+            viewModel.refreshBatchNamePreview(productId, batchDateStr)
         }
     }
 
@@ -116,7 +129,19 @@ fun NewBatchScreen(
                 file
             )
             cameraUri = uri
-            takePictureLauncher.launch(uri)
+            // 先检查是否有相机应用，避免 ActivityNotFoundException 闪退
+            val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            if (captureIntent.resolveActivity(context.packageManager) != null) {
+                try {
+                    takePictureLauncher.launch(uri)
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(context, "无法打开相机", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "未检测到相机应用", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "无法访问存储目录", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -154,27 +179,31 @@ fun NewBatchScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // 批次日期（日历选择），批次名自动生成：日期+序号
                     OutlinedTextField(
-                        value = batchName,
-                        onValueChange = { batchName = it },
-                        label = { Text("批次编号 *") },
-                        placeholder = { Text("如：试产01") },
-                        singleLine = true,
+                        value = batchDateStr ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("批次日期 *") },
+                        placeholder = { Text("点击选择日期") },
+                        trailingIcon = {
+                            IconButton(onClick = { showDatePicker = true }) {
+                                Icon(Calendar, "选择日期", tint = Foggy)
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (!batchNamePreview.isNullOrBlank()) {
+                        Text(
+                            "批次编号：$batchNamePreview（自动生成）",
+                            fontSize = 12.sp,
+                            color = Foggy
+                        )
+                    }
                     OutlinedTextField(
                         value = sampleWeight,
                         onValueChange = { sampleWeight = it },
                         label = { Text("样品重量 (g) *") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = processingCost,
-                        onValueChange = { processingCost = it },
-                        label = { Text("加工费 (元)") },
-                        placeholder = { Text("0") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
@@ -258,14 +287,6 @@ fun NewBatchScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("加工费", color = Foggy)
-                        Text("¥%,.2f".format(processingCost.toDoubleOrNull() ?: 0.0))
-                    }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -273,7 +294,7 @@ fun NewBatchScreen(
                     ) {
                         Text("总成本", fontWeight = FontWeight.Bold)
                         Text(
-                            "¥%,.2f".format(totalMaterialCost + (processingCost.toDoubleOrNull() ?: 0.0)),
+                            "¥%,.2f".format(totalMaterialCost),
                             fontWeight = FontWeight.Bold,
                             color = Rausch
                         )
@@ -284,20 +305,19 @@ fun NewBatchScreen(
             Button(
                 onClick = {
                     val weight = sampleWeight.toDoubleOrNull() ?: return@Button
-                    if (batchName.isNotBlank() && weight > 0) {
+                    if (batchDateStr.isNullOrBlank()) return@Button
+                    if (weight > 0) {
                         if (isEdit) {
                             viewModel.updateBatch(
-                                batchName = batchName,
+                                batchDate = batchDateStr!!,
                                 sampleWeight = weight,
-                                processingCost = processingCost.toDoubleOrNull() ?: 0.0,
                                 note = note
                             )
                         } else {
                             viewModel.saveBatch(
                                 productId = productId,
-                                batchName = batchName,
+                                batchDate = batchDateStr!!,
                                 sampleWeight = weight,
-                                processingCost = processingCost.toDoubleOrNull() ?: 0.0,
                                 note = note
                             )
                         }
@@ -307,7 +327,7 @@ fun NewBatchScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
-                enabled = batchName.isNotBlank() && (sampleWeight.toDoubleOrNull() ?: 0.0) > 0,
+                enabled = !batchDateStr.isNullOrBlank() && (sampleWeight.toDoubleOrNull() ?: 0.0) > 0,
                 shape = ButtonShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Rausch,
@@ -377,6 +397,60 @@ fun NewBatchScreen(
             }
         )
     }
+
+    // 批次日期选择器
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = batchDateMillis ?: System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { batchDateMillis = it }
+                        showDatePicker = false
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("取消") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+// ─────────── 批次日期工具 ───────────
+
+/** UTC 毫秒 → yyyy-MM-dd（DatePicker 使用 UTC 午夜） */
+private fun formatDateMillis(utcMillis: Long): String =
+    java.time.Instant.ofEpochMilli(utcMillis)
+        .atZone(java.time.ZoneOffset.UTC)
+        .toLocalDate()
+        .toString()
+
+/** 从批次名解析日期（yyyy-MM-dd-NN），失败返回 null */
+private fun parseDateMillis(batchName: String): Long? {
+    if (batchName.length < 10) return null
+    val datePart = batchName.take(10)
+    return try {
+        java.time.LocalDate.parse(datePart)
+            .atStartOfDay(java.time.ZoneOffset.UTC)
+            .toInstant()
+            .toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** epoch 毫秒（本地时区）→ 该日期 UTC 午夜的毫秒 */
+private fun toUtcDateMillis(epochMillis: Long): Long {
+    val localDate = java.time.Instant.ofEpochMilli(epochMillis)
+        .atZone(java.time.ZoneId.systemDefault())
+        .toLocalDate()
+    return localDate.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
 }
 
 /**
