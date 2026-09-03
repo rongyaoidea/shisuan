@@ -1,0 +1,11 @@
+[target.aarch64-linux-android]
+linker = "./.cargo/linker-aarch64.cmd"
+
+[target.armv7-linux-androideabi]
+linker = "./.cargo/linker-armv7.cmd"
+
+[target.x86_64-linux-android]
+linker = "./.cargo/linker-x86_64.cmd"
+
+[target.i686-linux-android]
+linker = "./.cargo/linker-i686.cmd"

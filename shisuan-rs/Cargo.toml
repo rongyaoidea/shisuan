@@ -1,0 +1,28 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "shisuan-core"
+version = "1.0.0"
+edition = "2021"
+authors = ["Sapiens AI"]
+description = "食算核心计算引擎 - 工厂食品成本计算（Rust + JNI，运行在 Android 设备上）"
+license = "MIT"
+
+[lib]
+name = "shisuan_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# JNI 绑定 - Java/Kotlin 与 Rust 互通的桥梁
+jni = { version = "0.21", default-features = false }
+# 字符串处理
+# 无其他运行时依赖，保持 .so 体积最小
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

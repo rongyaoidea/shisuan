@@ -1,103 +1,196 @@
 package com.example.shisuan.data.repository
 
 import com.example.shisuan.data.database.*
-import com.example.shisuan.domain.model.CostResult
-import com.example.shisuan.utils.CostCalculator
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.firstOrNull
 
-class CostRepository(
-    private val batchDao: BatchDao,
-    private val unitConfigDao: UnitConfigDao,
-    private val ingredientDao: IngredientDao,
-    private val batchMaterialDao: BatchMaterialDao,
-    private val batchResultDao: BatchResultDao,
-    private val batchProblemDao: BatchProblemDao,
-    private val snapshotDao: SnapshotDao,
-    private val logDao: LogDao
-) {
-    val allBatches: Flow<List<BatchRecord>> = batchDao.getAll()
-    val allIngredients: Flow<List<Ingredient>> = ingredientDao.getAll()
-    val unitConfig: Flow<UnitConfig?> = unitConfigDao.get()
-
-    suspend fun insertBatch(batch: BatchRecord): Long {
-        val id = batchDao.insert(batch)
-        logDao.insert(OperationLog(
-            operationType = "CREATE", entityType = "BATCH", entityId = id,
-            entityName = "${batch.productName}-${batch.batchName}",
-            after = batch.toString(), createdAt = System.currentTimeMillis()
-        ))
-        createSnapshot(id, batch)
-        return id
-    }
-
-    suspend fun updateBatch(batch: BatchRecord) {
-        batchDao.update(batch)
-        logDao.insert(OperationLog(
-            operationType = "UPDATE", entityType = "BATCH", entityId = batch.id,
-            entityName = "${batch.productName}-${batch.batchName}",
-            after = batch.toString(), createdAt = System.currentTimeMillis()
-        ))
-        createSnapshot(batch.id, batch)
-    }
-
-    suspend fun deleteBatch(batch: BatchRecord) = batchDao.delete(batch)
-
-    suspend fun addMaterial(material: BatchMaterial) = batchMaterialDao.insert(material)
-    suspend fun clearMaterials(batchId: Long) = batchMaterialDao.deleteByBatch(batchId)
-
-    suspend fun saveResult(result: BatchResult) = batchResultDao.upsert(result)
-    suspend fun getBatchResult(batchId: Long): BatchResult? = batchResultDao.getByBatch(batchId)
-
-    suspend fun addProblem(problem: BatchProblem) = batchProblemDao.insert(problem)
-    suspend fun updateProblem(problem: BatchProblem) = batchProblemDao.update(problem)
-    fun getProblems(batchId: Long): Flow<List<BatchProblem>> = batchProblemDao.getByBatch(batchId)
-    fun getAllProblems(resolved: Boolean): Flow<List<BatchProblem>> = batchProblemDao.getAll(resolved)
-
-    suspend fun saveUnitConfig(config: UnitConfig) = unitConfigDao.save(config)
-
-    suspend fun createSnapshot(batchId: Long, batch: BatchRecord) {
-        val cfg = unitConfigDao.get().firstOrNull() ?: return
-        val result = CostCalculator.calculate(
-            sampleWeightGram = batch.sampleWeightGram,
-            materialCost = batch.materialCost,
-            processingCost = batch.processingCost,
-            weightPerBoxGram = cfg.weightPerBoxGram,
-            packagesPerBox = cfg.packagesPerBox
+/**
+ * 数据仓库层 - 统一数据访问
+ * 重构后支持 Product 产品管理
+ */
+class CostRepository(private val db: CostCalDatabase) {
+    
+    // ============ Product 产品管理 ============
+    
+    val allProducts: Flow<List<Product>> = db.productDao().getAllActive()
+    
+    fun getProductById(id: Long): Flow<Product?> = db.productDao().getById(id)
+    
+    fun getProductsByCategory(category: String): Flow<List<Product>> = 
+        db.productDao().getByCategory(category)
+    
+    suspend fun saveProduct(product: Product): Long = 
+        db.productDao().insert(product)
+    
+    suspend fun updateProduct(product: Product) = 
+        db.productDao().update(product)
+    
+    suspend fun deleteProduct(product: Product) = 
+        db.productDao().delete(product)
+    
+    suspend fun deactivateProduct(id: Long) = 
+        db.productDao().deactivate(id)
+    
+    // ============ Batch 批次管理 ============
+    
+    val allBatches: Flow<List<BatchRecord>> = db.batchDao().getAll()
+    
+    fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>> = 
+        db.batchDao().getByProduct(productId)
+    
+    fun getBatchById(id: Long): Flow<BatchRecord?> = 
+        db.batchDao().getById(id)
+    
+    /**
+     * 保存批次 + 原料明细（事务）
+     */
+    suspend fun saveBatchWithIngredients(
+        batch: BatchRecord,
+        ingredients: List<BatchIngredient>
+    ): Long {
+        val batchId = db.batchDao().insert(batch)
+        val ingredientsWithBatchId = ingredients.map { it.copy(batchId = batchId) }
+        db.batchIngredientDao().insertAll(ingredientsWithBatchId)
+        
+        // 记录操作日志
+        db.logDao().insert(
+            OperationLog(
+                operationType = "CREATE_BATCH",
+                targetType = "BatchRecord",
+                targetId = batchId,
+                details = "批次 ${batch.batchName}，${ingredients.size} 种原料"
+            )
         )
-        val number = snapshotDao.nextNumber(batchId)
-        snapshotDao.insert(BatchSnapshot(
-            batchId = batchId, snapshotNumber = number,
-            productName = batch.productName, batchName = batch.batchName,
-            sampleWeightGram = batch.sampleWeightGram,
-            materialCost = batch.materialCost, processingCost = batch.processingCost,
-            note = batch.note, createdAt = System.currentTimeMillis(),
-            unitCostPerGram = result.unitCostPerGram,
-            unitCostPerTon = result.unitCostPerTon,
-            costPerBox = result.costPerBox, costPerPackage = result.costPerPackage
-        ))
-        snapshotDao.trimOld(batchId, 50)
+        return batchId
     }
-
-    fun getSnapshots(batchId: Long): Flow<List<BatchSnapshot>> = snapshotDao.getByBatch(batchId)
-
-    fun getTrendPoints(productName: String, limit: Int = 20): Flow<List<TrendPoint>> {
-        return combine(batchDao.getByProduct(productName), unitConfigDao.get()) { batches, cfg ->
-            batches.take(limit).map { batch ->
-                val c = cfg ?: UnitConfig(weightPerBoxGram = 5000.0, packagesPerBox = 10, weightPerPackageGram = 500.0, createdAt = 0L)
-                val r = CostCalculator.calculate(
-                    sampleWeightGram = batch.sampleWeightGram,
-                    materialCost = batch.materialCost,
-                    processingCost = batch.processingCost,
-                    weightPerBoxGram = c.weightPerBoxGram,
-                    packagesPerBox = c.packagesPerBox
-                )
-                TrendPoint(batch.createdAt, batch.productName, r.unitCostPerTon, r.costPerBox, batch.materialCost + batch.processingCost)
-            }.reversed()
-        }
+    
+    suspend fun updateBatch(batch: BatchRecord) = 
+        db.batchDao().update(batch)
+    
+    suspend fun deleteBatch(batch: BatchRecord) {
+        db.batchDao().delete(batch)
+        db.logDao().insert(
+            OperationLog(
+                operationType = "DELETE_BATCH",
+                targetType = "BatchRecord",
+                targetId = batch.id,
+                details = "删除批次 ${batch.batchName}"
+            )
+        )
     }
-
-    data class TrendPoint(val date: Long, val productName: String, val unitCostPerTon: Double, val costPerBox: Double, val totalCost: Double)
+    
+    // ============ BatchIngredient 原料明细 ============
+    
+    fun getBatchIngredients(batchId: Long): Flow<List<BatchIngredient>> = 
+        db.batchIngredientDao().getByBatch(batchId)
+    
+    suspend fun getBatchMaterialCost(batchId: Long): Double = 
+        db.batchIngredientDao().getTotalCost(batchId) ?: 0.0
+    
+    suspend fun addIngredientToBatch(ingredient: BatchIngredient): Long = 
+        db.batchIngredientDao().insert(ingredient)
+    
+    suspend fun updateBatchIngredient(ingredient: BatchIngredient) = 
+        db.batchIngredientDao().update(ingredient)
+    
+    suspend fun deleteBatchIngredient(ingredient: BatchIngredient) = 
+        db.batchIngredientDao().delete(ingredient)
+    
+    // ============ Ingredient 原料库 ============
+    
+    val allIngredients: Flow<List<Ingredient>> = db.ingredientDao().getAllActive()
+    
+    fun getIngredientsByCategory(category: String): Flow<List<Ingredient>> = 
+        db.ingredientDao().getByCategory(category)
+    
+    suspend fun getIngredientById(id: Long): Ingredient? = 
+        db.ingredientDao().getById(id)
+    
+    suspend fun saveIngredient(ingredient: Ingredient): Long = 
+        db.ingredientDao().insert(ingredient)
+    
+    suspend fun updateIngredient(ingredient: Ingredient) = 
+        db.ingredientDao().update(ingredient)
+    
+    suspend fun deleteIngredient(ingredient: Ingredient) = 
+        db.ingredientDao().delete(ingredient)
+    
+    // ============ UnitConfig 换算配置 ============
+    
+    val unitConfig: Flow<UnitConfig?> = db.unitConfigDao().getLatest()
+    
+    suspend fun saveUnitConfig(config: UnitConfig) = 
+        db.unitConfigDao().insert(config)
+    
+    // ============ BatchResult 批次成果 ============
+    
+    fun getBatchResult(batchId: Long): Flow<BatchResult?> = 
+        db.batchResultDao().getByBatch(batchId)
+    
+    suspend fun saveResult(result: BatchResult) = 
+        db.batchResultDao().insert(result)
+    
+    suspend fun updateResult(result: BatchResult) = 
+        db.batchResultDao().update(result)
+    
+    // ============ BatchProblem 问题记录 ============
+    
+    fun getBatchProblems(batchId: Long): Flow<List<BatchProblem>> = 
+        db.batchProblemDao().getByBatch(batchId)
+    
+    suspend fun saveProblem(problem: BatchProblem) = 
+        db.batchProblemDao().insert(problem)
+    
+    suspend fun updateProblem(problem: BatchProblem) = 
+        db.batchProblemDao().update(problem)
+    
+    suspend fun deleteProblem(problem: BatchProblem) = 
+        db.batchProblemDao().delete(problem)
+    
+    // ============ Snapshot 快照 ============
+    
+    fun getBatchSnapshots(batchId: Long): Flow<List<BatchSnapshot>> = 
+        db.snapshotDao().getByBatch(batchId)
+    
+    suspend fun saveSnapshot(snapshot: BatchSnapshot) = 
+        db.snapshotDao().insert(snapshot)
+    
+    // ============ OperationLog 操作日志 ============
+    
+    val recentLogs: Flow<List<OperationLog>> = db.logDao().getRecent()
+    
+    suspend fun log(operationType: String, targetType: String, targetId: Long, details: String) {
+        db.logDao().insert(
+            OperationLog(
+                operationType = operationType,
+                targetType = targetType,
+                targetId = targetId,
+                details = details
+            )
+        )
+    }
 }
+
+/**
+ * 数据类 - 批次完整信息（含成本计算）
+ */
+data class BatchWithCost(
+    val batch: BatchRecord,
+    val product: Product,
+    val ingredients: List<BatchIngredient>,
+    val materialCost: Double, // 原料总成本
+    val totalCost: Double, // 总成本 = 原料 + 加工费
+    val result: com.example.shisuan.domain.model.CostResult? = null,
+    val previousTonCost: Double? = null
+)
+
+/**
+ * 数据类 - 产品汇总信息
+ */
+data class ProductSummary(
+    val product: Product,
+    val batchCount: Int,
+    val latestBatchDate: Long?,
+    val avgTonCost: Double?,
+    val minTonCost: Double?,
+    val maxTonCost: Double?
+)

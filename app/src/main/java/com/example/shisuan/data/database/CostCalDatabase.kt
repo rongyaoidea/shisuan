@@ -1,12 +1,20 @@
 package com.example.shisuan.data.database
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * Room 数据库 - 版本 2
+ * 新增 Product 表和 BatchIngredient 表
+ */
 @Database(
     entities = [
+        Product::class,
         UnitConfig::class,
         BatchRecord::class,
+        BatchIngredient::class,
         Ingredient::class,
         BatchMaterial::class,
         BatchResult::class,
@@ -14,11 +22,13 @@ import kotlinx.coroutines.flow.Flow
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class CostCalDatabase : RoomDatabase() {
+    abstract fun productDao(): ProductDao
     abstract fun batchDao(): BatchDao
+    abstract fun batchIngredientDao(): BatchIngredientDao
     abstract fun unitConfigDao(): UnitConfigDao
     abstract fun ingredientDao(): IngredientDao
     abstract fun batchMaterialDao(): BatchMaterialDao
@@ -35,10 +45,38 @@ abstract class CostCalDatabase : RoomDatabase() {
                     context.applicationContext,
                     CostCalDatabase::class.java,
                     "costcal.db"
-                ).build().also { INSTANCE = it }
+                )
+                .addMigrations(MIGRATION_1_2)
+                .build().also { INSTANCE = it }
             }
         }
     }
+}
+
+// ============ DAO 层 ============
+
+@Dao
+interface ProductDao {
+    @Query("SELECT * FROM product WHERE isActive = 1 ORDER BY updatedAt DESC")
+    fun getAllActive(): Flow<List<Product>>
+
+    @Query("SELECT * FROM product WHERE id = :id")
+    fun getById(id: Long): Flow<Product?>
+
+    @Query("SELECT * FROM product WHERE category = :category AND isActive = 1")
+    fun getByCategory(category: String): Flow<List<Product>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(product: Product): Long
+
+    @Update
+    suspend fun update(product: Product)
+
+    @Delete
+    suspend fun delete(product: Product)
+
+    @Query("UPDATE product SET isActive = 0 WHERE id = :id")
+    suspend fun deactivate(id: Long)
 }
 
 @Dao
@@ -46,11 +84,11 @@ interface BatchDao {
     @Query("SELECT * FROM batch_record ORDER BY createdAt DESC")
     fun getAll(): Flow<List<BatchRecord>>
 
-    @Query("SELECT * FROM batch_record WHERE productName = :productName ORDER BY createdAt DESC")
-    fun getByProduct(productName: String): Flow<List<BatchRecord>>
+    @Query("SELECT * FROM batch_record WHERE productId = :productId ORDER BY createdAt DESC")
+    fun getByProduct(productId: Long): Flow<List<BatchRecord>>
 
     @Query("SELECT * FROM batch_record WHERE id = :id")
-    suspend fun getById(id: Long): BatchRecord?
+    fun getById(id: Long): Flow<BatchRecord?>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(batch: BatchRecord): Long
@@ -60,30 +98,51 @@ interface BatchDao {
 
     @Delete
     suspend fun delete(batch: BatchRecord)
+}
 
-    @Query("SELECT COUNT(*) FROM batch_record WHERE productName = :productName")
-    suspend fun countByProduct(productName: String): Int
+@Dao
+interface BatchIngredientDao {
+    @Query("SELECT * FROM batch_ingredient WHERE batchId = :batchId")
+    fun getByBatch(batchId: Long): Flow<List<BatchIngredient>>
+
+    @Query("SELECT SUM(totalCost) FROM batch_ingredient WHERE batchId = :batchId")
+    suspend fun getTotalCost(batchId: Long): Double?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(ingredient: BatchIngredient): Long
+
+    @Insert
+    suspend fun insertAll(ingredients: List<BatchIngredient>)
+
+    @Update
+    suspend fun update(ingredient: BatchIngredient)
+
+    @Delete
+    suspend fun delete(ingredient: BatchIngredient)
+
+    @Query("DELETE FROM batch_ingredient WHERE batchId = :batchId")
+    suspend fun deleteByBatch(batchId: Long)
 }
 
 @Dao
 interface UnitConfigDao {
-    @Query("SELECT * FROM unit_config LIMIT 1")
-    fun get(): Flow<UnitConfig?>
+    @Query("SELECT * FROM unit_config ORDER BY createdAt DESC LIMIT 1")
+    fun getLatest(): Flow<UnitConfig?>
 
-    @Upsert
-    suspend fun save(config: UnitConfig)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(config: UnitConfig)
 }
 
 @Dao
 interface IngredientDao {
-    @Query("SELECT * FROM ingredient ORDER BY name")
-    fun getAll(): Flow<List<Ingredient>>
+    @Query("SELECT * FROM ingredient WHERE isActive = 1 ORDER BY name")
+    fun getAllActive(): Flow<List<Ingredient>>
 
-    @Query("SELECT * FROM ingredient WHERE category = :category ORDER BY name")
+    @Query("SELECT * FROM ingredient WHERE category = :category AND isActive = 1")
     fun getByCategory(category: String): Flow<List<Ingredient>>
 
-    @Query("SELECT * FROM ingredient WHERE name LIKE '%' || :query || '%' ORDER BY name")
-    fun search(query: String): Flow<List<Ingredient>>
+    @Query("SELECT * FROM ingredient WHERE id = :id")
+    suspend fun getById(id: Long): Ingredient?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(ingredient: Ingredient): Long
@@ -97,26 +156,26 @@ interface IngredientDao {
 
 @Dao
 interface BatchMaterialDao {
-    @Query("SELECT * FROM batch_material WHERE batchId = :batchId ORDER BY id")
+    @Query("SELECT * FROM batch_material WHERE batchId = :batchId")
     fun getByBatch(batchId: Long): Flow<List<BatchMaterial>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(material: BatchMaterial): Long
+    @Insert
+    suspend fun insert(material: BatchMaterial)
 
     @Delete
     suspend fun delete(material: BatchMaterial)
-
-    @Query("DELETE FROM batch_material WHERE batchId = :batchId")
-    suspend fun deleteByBatch(batchId: Long)
 }
 
 @Dao
 interface BatchResultDao {
-    @Query("SELECT * FROM batch_result WHERE batchId = :batchId LIMIT 1")
-    suspend fun getByBatch(batchId: Long): BatchResult?
+    @Query("SELECT * FROM batch_result WHERE batchId = :batchId")
+    fun getByBatch(batchId: Long): Flow<BatchResult?>
 
-    @Upsert
-    suspend fun upsert(result: BatchResult)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(result: BatchResult)
+
+    @Update
+    suspend fun update(result: BatchResult)
 }
 
 @Dao
@@ -124,14 +183,14 @@ interface BatchProblemDao {
     @Query("SELECT * FROM batch_problem WHERE batchId = :batchId ORDER BY createdAt DESC")
     fun getByBatch(batchId: Long): Flow<List<BatchProblem>>
 
-    @Query("SELECT * FROM batch_problem WHERE resolved = :resolved ORDER BY createdAt DESC")
-    fun getAll(resolved: Boolean): Flow<List<BatchProblem>>
-
     @Insert
-    suspend fun insert(problem: BatchProblem): Long
+    suspend fun insert(problem: BatchProblem)
 
     @Update
     suspend fun update(problem: BatchProblem)
+
+    @Delete
+    suspend fun delete(problem: BatchProblem)
 }
 
 @Dao
@@ -139,24 +198,99 @@ interface SnapshotDao {
     @Query("SELECT * FROM batch_snapshot WHERE batchId = :batchId ORDER BY createdAt DESC")
     fun getByBatch(batchId: Long): Flow<List<BatchSnapshot>>
 
-    @Query("SELECT COALESCE(MAX(snapshotNumber), 0) + 1 FROM batch_snapshot WHERE batchId = :batchId")
-    suspend fun nextNumber(batchId: Long): Int
-
     @Insert
-    suspend fun insert(snapshot: BatchSnapshot): Long
-
-    @Delete
-    suspend fun delete(snapshot: BatchSnapshot)
-
-    @Query("DELETE FROM batch_snapshot WHERE batchId = :batchId AND id NOT IN (SELECT id FROM batch_snapshot WHERE batchId = :batchId ORDER BY createdAt DESC LIMIT :keep)")
-    suspend fun trimOld(batchId: Long, keep: Int)
+    suspend fun insert(snapshot: BatchSnapshot)
 }
 
 @Dao
 interface LogDao {
-    @Query("SELECT * FROM operation_log ORDER BY createdAt DESC LIMIT :limit")
-    fun getRecent(limit: Int = 50): Flow<List<OperationLog>>
+    @Query("SELECT * FROM operation_log ORDER BY createdAt DESC LIMIT 100")
+    fun getRecent(): Flow<List<OperationLog>>
 
     @Insert
-    suspend fun insert(log: OperationLog): Long
+    suspend fun insert(log: OperationLog)
+}
+
+/**
+ * 数据库迁移：v1 → v2
+ * - 新增 Product 表
+ * - 修改 BatchRecord：添加 productId，迁移 productName → Product
+ * - 新增 BatchIngredient 表
+ */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 创建 Product 表
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS product (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                isActive INTEGER NOT NULL DEFAULT 1,
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        // 2. 从 batch_record 提取唯一产品名并插入 Product
+        database.execSQL("""
+            INSERT INTO product (name, createdAt, updatedAt)
+            SELECT DISTINCT productName, MIN(createdAt), MAX(updatedAt)
+            FROM batch_record
+            GROUP BY productName
+        """.trimIndent())
+
+        // 3. 创建新的 batch_record 表结构
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS batch_record_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                productId INTEGER NOT NULL,
+                batchName TEXT NOT NULL,
+                sampleWeightGram REAL NOT NULL,
+                processingCost REAL NOT NULL DEFAULT 0.0,
+                note TEXT NOT NULL DEFAULT '',
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL,
+                FOREIGN KEY(productId) REFERENCES product(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_productId ON batch_record_new(productId)")
+        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_createdAt ON batch_record_new(createdAt)")
+
+        // 4. 迁移数据：batch_record → batch_record_new，关联 productId
+        database.execSQL("""
+            INSERT INTO batch_record_new (id, productId, batchName, sampleWeightGram, processingCost, note, createdAt, updatedAt)
+            SELECT br.id, p.id, br.batchName, br.sampleWeightGram, br.processingCost, br.note, br.createdAt, br.updatedAt
+            FROM batch_record br
+            INNER JOIN product p ON br.productName = p.name
+        """.trimIndent())
+
+        // 5. 删除旧表，重命名新表
+        database.execSQL("DROP TABLE batch_record")
+        database.execSQL("ALTER TABLE batch_record_new RENAME TO batch_record")
+
+        // 6. 创建 BatchIngredient 表（新增原料明细）
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS batch_ingredient (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                batchId INTEGER NOT NULL,
+                ingredientName TEXT NOT NULL,
+                ingredientId INTEGER,
+                weight REAL NOT NULL,
+                unitPrice REAL NOT NULL,
+                priceUnit TEXT NOT NULL DEFAULT '元/kg',
+                totalCost REAL NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(batchId) REFERENCES batch_record(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_ingredient_batchId ON batch_ingredient(batchId)")
+
+        // 7. 将旧的 materialCost 转为单条原料记录（兼容处理）
+        database.execSQL("""
+            INSERT INTO batch_ingredient (batchId, ingredientName, weight, unitPrice, totalCost)
+            SELECT id, '原料总成本(迁移)', sampleWeightGram, materialCost / sampleWeightGram, materialCost
+            FROM (SELECT id, sampleWeightGram, materialCost FROM batch_record WHERE materialCost > 0)
+        """.trimIndent())
+    }
 }

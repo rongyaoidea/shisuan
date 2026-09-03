@@ -9,7 +9,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.example.shisuan.ui.navigation.NavGraph
 import com.example.shisuan.ui.theme.ShisuanTheme
+import dagger.hilt.android.AndroidEntryPoint
 
+/**
+ * MainActivity - Hilt 入口
+ */
+@AndroidEntryPoint
 class ShisuanApp : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
