@@ -8,6 +8,10 @@ import com.example.shisuan.domain.model.CostResult
  *
  * 首选 Rust 引擎（libshisuan_core.so，通过 JNI 调用，源：shisuan-rs/）
  * 若原生库未加载（如单元测试环境），自动回退到等价的 Kotlin 实现。
+ *
+ * 出品率折算在本层统一完成：先把投料重量换算为有效成品重量，
+ * 再进入引擎计算。这样引擎的 JNI 签名保持不变，
+ * 且 Rust 路径与 Kotlin 回退路径的公式天然一致，不会出现双实现漂移。
  */
 object CostCalculator {
 
@@ -24,23 +28,29 @@ object CostCalculator {
     )
 
     /**
-     * 核心换算（纯物料成本，无加工费）：
-     * 克单价 = 总成本 / 样品重量
-     * 吨价   = 克单价 × 1,000,000
-     * 箱价   = 克单价 × 每箱克数
-     * 包价   = 箱价 / 每箱包数
+     * 核心换算：
+     * 总成本   = 原料成本 + 加工费（包材/人工/水电折旧）
+     * 有效产量 = 投料重量 × 出品率
+     * 克单价   = 总成本 / 有效产量
+     * 吨价     = 克单价 × 1,000,000
+     * 箱价     = 克单价 × 每箱克数
+     * 包价     = 箱价 / 每箱包数
+     *
+     * @param yieldRatePercent 出品率(%)，null 表示不折算（按 100% 计）
      */
     fun calculate(
         sampleWeightGram: Double,
         materialCost: Double,
+        processingCost: Double = 0.0,
         weightPerBoxGram: Double,
-        packagesPerBox: Int
+        packagesPerBox: Int,
+        yieldRatePercent: Double? = null
     ): CostResult {
+        val effectiveWeight = effectiveWeightGram(sampleWeightGram, yieldRatePercent)
         if (rustAvailable) {
             val out = DoubleArray(5)
-            // 纯物料成本模式：加工费恒为 0（Rust 引擎接口保留，传 0.0）
             val code = ShisuanCore.calculate(
-                sampleWeightGram, materialCost, 0.0,
+                effectiveWeight, materialCost, processingCost,
                 weightPerBoxGram, packagesPerBox, out
             )
             if (code == 0) {
@@ -49,9 +59,38 @@ object CostCalculator {
             // Rust 返回无效参数时回退到 Kotlin 计算（保持行为一致）
         }
         return calculateKotlin(
-            sampleWeightGram, materialCost,
+            effectiveWeight, materialCost, processingCost,
             weightPerBoxGram, packagesPerBox
         )
+    }
+
+    /**
+     * 出品率 → 有效成品重量。
+     *
+     * 合法区间为 (0, 100]：
+     * - null / <=0：按 100% 计（不折算），兼容未录入出品率的历史批次
+     * - >100：视为无效录入 —— 折算出大于投料的「产量」会低估成本，
+     *   与其放大产量不如按 100% 保守处理
+     */
+    fun effectiveWeightGram(sampleWeightGram: Double, yieldRatePercent: Double?): Double {
+        if (sampleWeightGram <= 0.0) return sampleWeightGram
+        if (yieldRatePercent == null || yieldRatePercent <= 0.0 || yieldRatePercent > 100.0) {
+            return sampleWeightGram
+        }
+        return sampleWeightGram * yieldRatePercent / 100.0
+    }
+
+    /**
+     * 由吨价与目标毛利率推导建议出厂价（元/吨）。
+     *
+     * 建议售价 = 吨价 ÷ (1 - 毛利率)
+     *
+     * @return 毛利率不在 (0, 100) 区间或成本非正时返回 null（UI 不展示报价）
+     */
+    fun suggestedTonPrice(costPerTon: Double, marginRatePercent: Double): Double? {
+        if (costPerTon <= 0.0) return null
+        if (marginRatePercent <= 0.0 || marginRatePercent >= 100.0) return null
+        return round2(costPerTon / (1.0 - marginRatePercent / 100.0))
     }
 
     /**
@@ -108,16 +147,20 @@ object CostCalculator {
 
     // ─────────── Kotlin 等价实现（回退） ───────────
 
+    /**
+     * @param sampleWeightGram 有效成品重量（调用前已完成出品率折算）
+     */
     private fun calculateKotlin(
         sampleWeightGram: Double,
         materialCost: Double,
+        processingCost: Double,
         weightPerBoxGram: Double,
         packagesPerBox: Int
     ): CostResult {
         if (sampleWeightGram <= 0.0 || weightPerBoxGram <= 0.0 || packagesPerBox <= 0) {
             return CostResult(0.0, 0.0, 0.0, 0.0, 0.0)
         }
-        val totalCost = materialCost
+        val totalCost = materialCost + processingCost
         val unitCostPerGram = totalCost / sampleWeightGram
         val unitCostPerTon = unitCostPerGram * 1_000_000.0
         val boxesPerTon = 1_000_000.0 / weightPerBoxGram

@@ -1,5 +1,8 @@
 package com.example.shisuan.ui.screen
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -11,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -20,40 +24,64 @@ import com.example.shisuan.data.database.Product
 import com.example.shisuan.ui.animation.entranceAnimation
 import com.example.shisuan.ui.animation.pressScale
 import com.example.shisuan.ui.icons.Add
-import com.example.shisuan.ui.icons.ArrowBack
-import com.example.shisuan.ui.icons.Camera
-import com.example.shisuan.ui.icons.Delete
-import com.example.shisuan.ui.icons.Edit
 import com.example.shisuan.ui.icons.Flask
-import com.example.shisuan.ui.icons.Gallery
 import com.example.shisuan.ui.icons.Jar
 import com.example.shisuan.ui.icons.Package
-import com.example.shisuan.ui.icons.Scale
 import com.example.shisuan.ui.icons.categoryIcon
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
-import com.example.shisuan.ui.theme.Rausch
+import com.example.shisuan.ui.viewModel.BackupViewModel
 import com.example.shisuan.ui.viewModel.ProductViewModel
+import java.time.LocalDate
 
 /**
- * 产品列表页 - 新的主页
- * 显示所有产品（草莓酱、蓝莓酱等）
+ * 产品列表页 - 主页
+ * 显示所有产品（草莓酱、蓝莓酱等），顶栏提供配料库与备份/恢复入口
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProductListScreen(
     onNavigateToDetail: (Long) -> Unit,
     onNavigateToIngredientLibrary: () -> Unit = {},
-    viewModel: ProductViewModel = hiltViewModel()
+    viewModel: ProductViewModel = hiltViewModel(),
+    backupViewModel: BackupViewModel = hiltViewModel()
 ) {
     val products by viewModel.products.collectAsState()
+    val errorMessage by viewModel.error.collectAsState()
     var showNewProductDialog by remember { mutableStateOf(false) }
-    
+    var showBackupDialog by remember { mutableStateOf(false) }
+    var pendingImport by remember { mutableStateOf(false) } // 二次确认导入
+
+    // 备份操作提示（成功与失败共用）
+    val backupMessage by backupViewModel.message.collectAsState()
+    val backupError by backupViewModel.error.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(errorMessage, backupMessage, backupError) {
+        (backupMessage ?: backupError ?: errorMessage)?.let {
+            snackbarHostState.showSnackbar(it)
+            backupViewModel.consumeMessage()
+            backupViewModel.consumeError()
+            viewModel.consumeError()
+        }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri: Uri? -> uri?.let { backupViewModel.exportTo(it) } }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let { backupViewModel.importFrom(it) } }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("食算", style = MaterialTheme.typography.headlineLarge) },
                 actions = {
+                    TextButton(onClick = { showBackupDialog = true }) {
+                        Text("备份", color = Rausch)
+                    }
                     IconButton(onClick = onNavigateToIngredientLibrary) {
                         Icon(Flask, "配料库")
                     }
@@ -63,6 +91,7 @@ fun ProductListScreen(
                 )
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showNewProductDialog = true },
@@ -90,19 +119,70 @@ fun ProductListScreen(
             }
         }
     }
-    
+
     if (showNewProductDialog) {
         NewProductDialog(
             onDismiss = { showNewProductDialog = false },
-            onSave = { name, category, desc, pkgBox, pkgGram ->
+            onSave = { name, category, desc, pkgBox, pkgGram, marginRate ->
                 viewModel.saveProduct(
                     name = name,
                     category = category,
                     description = desc,
                     packagesPerBox = pkgBox,
-                    weightPerPackageGram = pkgGram
+                    weightPerPackageGram = pkgGram,
+                    targetMarginRate = marginRate
                 )
                 showNewProductDialog = false
+            }
+        )
+    }
+
+    // 备份 / 恢复入口对话框
+    if (showBackupDialog) {
+        AlertDialog(
+            onDismissRequest = { showBackupDialog = false },
+            title = { Text("数据备份与恢复") },
+            text = {
+                Text(
+                    "所有数据仅保存在本机。建议定期导出备份，避免手机丢失或更换时历史批次记录丢失。\n\n" +
+                        "恢复备份会覆盖现有全部数据。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showBackupDialog = false
+                        exportLauncher.launch("shisuan_backup_${LocalDate.now()}.db")
+                    }
+                ) { Text("导出备份", color = Rausch) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showBackupDialog = false
+                        pendingImport = true
+                    }
+                ) { Text("恢复数据", color = DangerRed) }
+            }
+        )
+    }
+
+    // 恢复前二次确认：数据覆盖不可逆
+    if (pendingImport) {
+        AlertDialog(
+            onDismissRequest = { pendingImport = false },
+            title = { Text("确认恢复") },
+            text = { Text("恢复备份将覆盖当前全部产品与批次数据，且无法撤销。确定继续吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingImport = false
+                        importLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                    }
+                ) { Text("选择备份文件", color = DangerRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImport = false }) { Text("取消") }
             }
         )
     }
@@ -147,7 +227,7 @@ fun ProductCard(
                     modifier = Modifier.size(32.dp)
                 )
             }
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     product.name,
@@ -164,7 +244,7 @@ fun ProductCard(
                     )
                 }
             }
-            
+
             Icon(
                 imageVector = Add,
                 contentDescription = null,
@@ -176,20 +256,21 @@ fun ProductCard(
 }
 
 /**
- * 新建产品对话框 - 含包装规格设置
+ * 新建产品对话框 - 含包装规格与目标毛利率
  * 包装规格输入：每箱包数 + 每包克数，每箱克数自动计算
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewProductDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Int, Double) -> Unit
+    onSave: (String, String, String, Int, Double, Double) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var pkgBox by remember { mutableStateOf("20") }
     var pkgGram by remember { mutableStateOf("250") }
+    var marginRate by remember { mutableStateOf("") }
 
     val pkgBoxNum = pkgBox.toIntOrNull() ?: 0
     val pkgGramNum = pkgGram.toDoubleOrNull() ?: 0.0
@@ -246,6 +327,15 @@ fun NewProductDialog(
                     color = Foggy
                 )
                 OutlinedTextField(
+                    value = marginRate,
+                    onValueChange = { marginRate = it },
+                    label = { Text("目标毛利率 %（可选）") },
+                    placeholder = { Text("如 30：批次卡将显示建议出厂价") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("描述（可选）") },
@@ -261,7 +351,8 @@ fun NewProductDialog(
                         onSave(
                             name, category, description,
                             pkgBox.toIntOrNull() ?: 20,
-                            pkgGram.toDoubleOrNull() ?: 250.0
+                            pkgGram.toDoubleOrNull() ?: 250.0,
+                            marginRate.toDoubleOrNull()?.takeIf { it > 0.0 } ?: 0.0
                         )
                     }
                 },

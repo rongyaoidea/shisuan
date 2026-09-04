@@ -32,10 +32,14 @@ class CostCalculatorTest {
 
     @Test
     fun `非法输入返回全零`() {
-        val r = CostCalculator.calculate(0.0, 5.0, 5000.0, 20)
+        val r = CostCalculator.calculate(
+            0.0, 5.0, weightPerBoxGram = 5000.0, packagesPerBox = 20
+        )
         assertEquals(CostResult(0.0, 0.0, 0.0, 0.0, 0.0), r)
 
-        val r2 = CostCalculator.calculate(10.0, 5.0, 0.0, 20)
+        val r2 = CostCalculator.calculate(
+            10.0, 5.0, weightPerBoxGram = 0.0, packagesPerBox = 20
+        )
         assertEquals(0.0, r2.costPerBox, 0.0)
     }
 

@@ -12,3 +12,6 @@ app/build/
 build/
 .kotlin/
 kotlinx/
+
+# zcode 工具元数据
+.workbuddy/

@@ -35,9 +35,18 @@ fun IngredientLibraryScreen(
     viewModel: IngredientLibraryViewModel = hiltViewModel()
 ) {
     val ingredients by viewModel.ingredients.collectAsState()
+    val errorMessage by viewModel.error.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Ingredient?>(null) }
     var pendingDelete by remember { mutableStateOf<Ingredient?>(null) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeError()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -53,6 +62,7 @@ fun IngredientLibraryScreen(
                 )
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddDialog = true },

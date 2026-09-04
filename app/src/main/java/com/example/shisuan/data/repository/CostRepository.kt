@@ -2,7 +2,9 @@ package com.example.shisuan.data.repository
 
 import androidx.room.withTransaction
 import com.example.shisuan.data.database.*
+import com.example.shisuan.utils.BatchSnapshotCodec
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /**
  * 数据仓库层 - 统一数据访问
@@ -38,6 +40,12 @@ class CostRepository(private val db: CostCalDatabase) {
     fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>> = 
         db.batchDao().getByProduct(productId)
     
+    /**
+     * 一次取回批次及其配料明细（单查询替代 N 次配料查询，避免 N+1 放大）
+     */
+    fun getBatchesWithIngredients(productId: Long): Flow<List<BatchWithIngredients>> =
+        db.batchDao().getBatchesWithIngredients(productId)
+    
     fun getBatchById(id: Long): Flow<BatchRecord?> = 
         db.batchDao().getById(id)
     
@@ -47,11 +55,14 @@ class CostRepository(private val db: CostCalDatabase) {
     suspend fun saveBatchWithIngredients(
         batch: BatchRecord,
         ingredients: List<BatchIngredient>
-    ): Long {
+    ): Long = db.withTransaction {
         val batchId = db.batchDao().insert(batch)
-        val ingredientsWithBatchId = ingredients.map { it.copy(batchId = batchId) }
-        db.batchIngredientDao().insertAll(ingredientsWithBatchId)
-        
+        val savedIngredients = ingredients.map { it.copy(batchId = batchId) }
+        db.batchIngredientDao().insertAll(savedIngredients)
+
+        // git 式版本链：写入初始版本快照（同内容自动去重）
+        captureSnapshotLocked(batch.copy(id = batchId), savedIngredients)
+
         // 记录操作日志
         db.logDao().insert(
             OperationLog(
@@ -61,7 +72,7 @@ class CostRepository(private val db: CostCalDatabase) {
                 details = "批次 ${batch.batchName}，${ingredients.size} 种原料"
             )
         )
-        return batchId
+        return@withTransaction batchId
     }
     
     suspend fun updateBatch(batch: BatchRecord) = 
@@ -80,9 +91,76 @@ class CostRepository(private val db: CostCalDatabase) {
         db.batchIngredientDao().insertAll(
             ingredients.map { it.copy(batchId = batch.id, id = 0) }
         )
+        // git 式版本链：每次有效变更生成新版本（内容指纹去重）
+        captureSnapshotLocked(batch, ingredients)
+    }
+
+    /**
+     * git 式版本链核心：编码当前内容 → 计算指纹 → 查重后入库。
+     *
+     * - 指纹相同（内容未变，如「保存但没改任何东西」）→ 跳过，时间线不产生噪音提交
+     * - version 在同批次内递增，用于时间线排序与「当前版本」定位
+     * 仅供事务内部调用（方法名以 Locked 结尾以示提醒）。
+     */
+    private suspend fun captureSnapshotLocked(
+        batch: BatchRecord,
+        ingredients: List<BatchIngredient>
+    ) {
+        val encoded = BatchSnapshotCodec.encode(batch, ingredients)
+        val digest = BatchSnapshotCodec.digestOf(encoded)
+        if (db.snapshotDao().getByDigest(batch.id, digest) != null) return
+        db.snapshotDao().insert(
+            BatchSnapshot(
+                batchId = batch.id,
+                snapshotData = encoded,
+                digest = digest,
+                version = (db.snapshotDao().maxVersion(batch.id) ?: 0) + 1
+            )
+        )
+    }
+
+    /**
+     * 恢复到历史版本：解码快照并原子写回批次与配料。
+     *
+     * - 批次号保留当前值（改过日期的批次不回退编号）
+     * - 恢复后内容与目标版本一致 → 指纹相同 → 下次保存不会产生重复提交
+     * - 恢复动作写入操作日志（审计可追溯「谁在何时回到过哪个版本」）
+     *
+     * @return false 表示快照数据损坏或批次已不存在
+     */
+    suspend fun restoreSnapshot(snapshot: BatchSnapshot): Boolean = db.withTransaction {
+        val data = BatchSnapshotCodec.decode(snapshot.snapshotData)
+            ?: return@withTransaction false
+        val batch = db.batchDao().getById(snapshot.batchId).first()
+            ?: return@withTransaction false
+
+        db.batchDao().update(
+            batch.copy(
+                sampleWeightGram = data.sampleWeightGram,
+                packagingCost = data.packagingCost,
+                laborCost = data.laborCost,
+                overheadCost = data.overheadCost,
+                yieldRatePercent = data.yieldRatePercent,
+                note = data.note,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+        db.batchIngredientDao().deleteByBatch(snapshot.batchId)
+        db.batchIngredientDao().insertAll(
+            data.ingredients.map { it.copy(batchId = snapshot.batchId, id = 0) }
+        )
+        db.logDao().insert(
+            OperationLog(
+                operationType = "RESTORE_SNAPSHOT",
+                targetType = "BatchRecord",
+                targetId = snapshot.batchId,
+                details = "批次恢复到版本 #${snapshot.digest}"
+            )
+        )
+        true
     }
     
-    suspend fun deleteBatch(batch: BatchRecord) {
+    suspend fun deleteBatch(batch: BatchRecord) = db.withTransaction {
         db.batchDao().delete(batch)
         db.logDao().insert(
             OperationLog(
@@ -161,18 +239,28 @@ class CostRepository(private val db: CostCalDatabase) {
         }
     }
     
+    /**
+     * 批量按名称+品牌保存原料（单事务）
+     *
+     * OCR 一次可能识别出几十种配料，逐条写入会产生同等数量的独立事务，
+     * 这里合并为一次事务提交。
+     */
+    suspend fun saveIngredients(upserts: List<IngredientUpsert>) = db.withTransaction {
+        upserts.forEach { item ->
+            saveIngredientByNameAndBrand(
+                name = item.name,
+                brand = item.brand,
+                category = item.category,
+                unitPricePerKg = item.unitPricePerKg
+            )
+        }
+    }
+
     suspend fun updateIngredient(ingredient: Ingredient) = 
         db.ingredientDao().update(ingredient)
     
     suspend fun deleteIngredient(ingredient: Ingredient) = 
         db.ingredientDao().delete(ingredient)
-    
-    // ============ UnitConfig 换算配置 ============
-    
-    val unitConfig: Flow<UnitConfig?> = db.unitConfigDao().getLatest()
-    
-    suspend fun saveUnitConfig(config: UnitConfig) = 
-        db.unitConfigDao().insert(config)
     
     // ============ BatchResult 批次成果 ============
     
@@ -224,26 +312,14 @@ class CostRepository(private val db: CostCalDatabase) {
 }
 
 /**
- * 数据类 - 批次完整信息（含成本计算）
+ * 原料批量入库请求（按名称+品牌去重）
+ *
+ * @param brand 品牌/供应商，空串表示不区分品牌
+ * @param unitPricePerKg 参考单价，0 表示暂不设置（如 OCR 只识别出名称）
  */
-data class BatchWithCost(
-    val batch: BatchRecord,
-    val product: Product,
-    val ingredients: List<BatchIngredient>,
-    val materialCost: Double, // 原料总成本（纯物料，无加工费）
-    val totalCost: Double, // 总成本 = 原料成本
-    val result: com.example.shisuan.domain.model.CostResult? = null,
-    val previousTonCost: Double? = null
-)
-
-/**
- * 数据类 - 产品汇总信息
- */
-data class ProductSummary(
-    val product: Product,
-    val batchCount: Int,
-    val latestBatchDate: Long?,
-    val avgTonCost: Double?,
-    val minTonCost: Double?,
-    val maxTonCost: Double?
+data class IngredientUpsert(
+    val name: String,
+    val brand: String = "",
+    val category: String = "",
+    val unitPricePerKg: Double = 0.0
 )

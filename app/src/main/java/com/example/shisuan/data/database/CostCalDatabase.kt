@@ -6,42 +6,45 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Room 数据库 - 版本 6
+ * Room 数据库 - 版本 7
  * v2: 新增 Product 表和 BatchIngredient 表
  * v3: Product 增加包装规格字段（weightPerBoxGram/packagesPerBox/weightPerPackageGram）
  * v4: BatchRecord 移除 processingCost（纯物料成本，无加工费）
  * v5: BatchIngredient 增加 ratioPercent（比例输入原值，null=按克重）
  * v6: BatchIngredient 增加 ingredientSupplier（品牌冗余字段）
+ * v7: BatchRecord 恢复加工费分项（packaging/labor/overhead）与出品率 yieldRatePercent；
+ *     Product 增加 targetMarginRate；删除废弃表 unit_config / batch_material
+ * v8: BatchSnapshot 增加 digest（唯一变更编号）与 (batchId, digest) 唯一索引 —— git 式版本链
  */
 @Database(
     entities = [
         Product::class,
-        UnitConfig::class,
         BatchRecord::class,
         BatchIngredient::class,
         Ingredient::class,
-        BatchMaterial::class,
         BatchResult::class,
         BatchProblem::class,
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 6,
-    exportSchema = false
+    version = 8,
+    // 导出 schema 以支持迁移测试：schema JSON 位于 app/schemas/
+    exportSchema = true
 )
 abstract class CostCalDatabase : RoomDatabase() {
     abstract fun productDao(): ProductDao
     abstract fun batchDao(): BatchDao
     abstract fun batchIngredientDao(): BatchIngredientDao
-    abstract fun unitConfigDao(): UnitConfigDao
     abstract fun ingredientDao(): IngredientDao
-    abstract fun batchMaterialDao(): BatchMaterialDao
     abstract fun batchResultDao(): BatchResultDao
     abstract fun batchProblemDao(): BatchProblemDao
     abstract fun snapshotDao(): SnapshotDao
     abstract fun logDao(): LogDao
 
     companion object {
+        /** 当前应用支持的 schema 版本；恢复备份时用于拒绝来自更高版本的文件 */
+        const val SUPPORTED_DB_VERSION = 8
+
         @Volatile private var INSTANCE: CostCalDatabase? = null
         fun getInstance(context: android.content.Context): CostCalDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -52,7 +55,7 @@ abstract class CostCalDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
                 )
                 .build().also { INSTANCE = it }
             }
@@ -86,6 +89,18 @@ interface ProductDao {
     suspend fun deactivate(id: Long)
 }
 
+/**
+ * 批次 + 其原料明细（Room 关联查询，一次性取回）
+ *
+ * 供产品详情页使用：避免在 Flow 变换中对每个批次单独查询配料（N+1 查询放大）。
+ * Room 会监听 batch_ingredient 表，配料增删时自动重新发射。
+ */
+data class BatchWithIngredients(
+    @Embedded val batch: BatchRecord,
+    @Relation(parentColumn = "id", entityColumn = "batchId")
+    val ingredients: List<BatchIngredient>
+)
+
 @Dao
 interface BatchDao {
     @Query("SELECT * FROM batch_record ORDER BY createdAt DESC")
@@ -93,6 +108,13 @@ interface BatchDao {
 
     @Query("SELECT * FROM batch_record WHERE productId = :productId ORDER BY createdAt DESC")
     fun getByProduct(productId: Long): Flow<List<BatchRecord>>
+
+    /**
+     * 一次查出某产品的所有批次及其配料明细（单查询替代 N 次配料查询）
+     */
+    @Transaction
+    @Query("SELECT * FROM batch_record WHERE productId = :productId ORDER BY createdAt DESC")
+    fun getBatchesWithIngredients(productId: Long): Flow<List<BatchWithIngredients>>
 
     @Query("SELECT * FROM batch_record WHERE id = :id")
     fun getById(id: Long): Flow<BatchRecord?>
@@ -132,15 +154,6 @@ interface BatchIngredientDao {
 }
 
 @Dao
-interface UnitConfigDao {
-    @Query("SELECT * FROM unit_config ORDER BY createdAt DESC LIMIT 1")
-    fun getLatest(): Flow<UnitConfig?>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(config: UnitConfig)
-}
-
-@Dao
 interface IngredientDao {
     @Query("SELECT * FROM ingredient WHERE isActive = 1 ORDER BY name")
     fun getAllActive(): Flow<List<Ingredient>>
@@ -163,18 +176,6 @@ interface IngredientDao {
 
     @Delete
     suspend fun delete(ingredient: Ingredient)
-}
-
-@Dao
-interface BatchMaterialDao {
-    @Query("SELECT * FROM batch_material WHERE batchId = :batchId")
-    fun getByBatch(batchId: Long): Flow<List<BatchMaterial>>
-
-    @Insert
-    suspend fun insert(material: BatchMaterial)
-
-    @Delete
-    suspend fun delete(material: BatchMaterial)
 }
 
 @Dao
@@ -206,8 +207,17 @@ interface BatchProblemDao {
 
 @Dao
 interface SnapshotDao {
-    @Query("SELECT * FROM batch_snapshot WHERE batchId = :batchId ORDER BY createdAt DESC")
+    /** 按版本号倒序的完整历史时间线 */
+    @Query("SELECT * FROM batch_snapshot WHERE batchId = :batchId ORDER BY version DESC")
     fun getByBatch(batchId: Long): Flow<List<BatchSnapshot>>
+
+    /** 内容寻址查重：同一批次同内容只存一份（git 语义） */
+    @Query("SELECT * FROM batch_snapshot WHERE batchId = :batchId AND digest = :digest LIMIT 1")
+    suspend fun getByDigest(batchId: Long, digest: String): BatchSnapshot?
+
+    /** 该批次已存版本数，用于生成下一个递增 version */
+    @Query("SELECT MAX(version) FROM batch_snapshot WHERE batchId = :batchId")
+    suspend fun maxVersion(batchId: Long): Int?
 
     @Insert
     suspend fun insert(snapshot: BatchSnapshot)
@@ -392,5 +402,43 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
 val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL("ALTER TABLE batch_ingredient ADD COLUMN ingredientSupplier TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/**
+ * 数据库迁移：v6 → v7
+ *
+ * 1. Product 增加 targetMarginRate（目标毛利率，用于建议出厂价）
+ * 2. BatchRecord 恢复加工费分项（packagingCost / laborCost / overheadCost）
+ *    与出品率 yieldRatePercent（成品/投料折算）
+ * 3. 删除废弃表 unit_config 与 batch_material（v3 起产品级绑定包装规格，
+ *    batch_material 由 batch_ingredient 替代）
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE product ADD COLUMN targetMarginRate REAL NOT NULL DEFAULT 0.0")
+
+        database.execSQL("ALTER TABLE batch_record ADD COLUMN packagingCost REAL NOT NULL DEFAULT 0.0")
+        database.execSQL("ALTER TABLE batch_record ADD COLUMN laborCost REAL NOT NULL DEFAULT 0.0")
+        database.execSQL("ALTER TABLE batch_record ADD COLUMN overheadCost REAL NOT NULL DEFAULT 0.0")
+        database.execSQL("ALTER TABLE batch_record ADD COLUMN yieldRatePercent REAL")
+
+        database.execSQL("DROP TABLE IF EXISTS unit_config")
+        database.execSQL("DROP TABLE IF EXISTS batch_material")
+    }
+}
+
+/**
+ * 数据库迁移：v7 → v8
+ * BatchSnapshot 增加 digest（唯一变更编号）列与 (batchId, digest) 唯一索引，
+ * 支撑 git 式版本链：内容寻址去重、按编号定位、可回溯恢复。
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE batch_snapshot ADD COLUMN digest TEXT NOT NULL DEFAULT ''")
+        database.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS index_batch_snapshot_batchId_digest " +
+                "ON batch_snapshot(batchId, digest)"
+        )
     }
 }

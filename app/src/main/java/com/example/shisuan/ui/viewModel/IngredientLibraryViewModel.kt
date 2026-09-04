@@ -1,6 +1,5 @@
 package com.example.shisuan.ui.viewModel
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.data.repository.CostRepository
@@ -8,7 +7,6 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -18,15 +16,15 @@ import javax.inject.Inject
 @HiltViewModel
 class IngredientLibraryViewModel @Inject constructor(
     private val repo: CostRepository
-) : ViewModel() {
+) : BaseViewModel() {
 
     /** 全部原料（按名称排序） */
     val ingredients: StateFlow<List<Ingredient>> =
-        repo.allIngredients.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+        repo.allIngredients.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 新增原料：按名称+品牌去重，同名同品牌存在则更新为最新成本 */
     fun saveIngredient(name: String, brand: String, category: String, unitPricePerKg: Double) {
-        viewModelScope.launch {
+        launchSafe {
             repo.saveIngredientByNameAndBrand(name, brand, category, unitPricePerKg)
         }
     }
@@ -36,7 +34,7 @@ class IngredientLibraryViewModel @Inject constructor(
         ingredient: Ingredient,
         name: String, brand: String, category: String, unitPricePerKg: Double
     ) {
-        viewModelScope.launch {
+        launchSafe {
             repo.updateIngredient(
                 ingredient.copy(
                     name = name.trim(),
@@ -51,7 +49,7 @@ class IngredientLibraryViewModel @Inject constructor(
 
     /** 删除原料 */
     fun deleteIngredient(ingredient: Ingredient) {
-        viewModelScope.launch {
+        launchSafe {
             repo.deleteIngredient(ingredient)
         }
     }

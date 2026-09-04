@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -41,10 +42,14 @@ import com.example.shisuan.ui.icons.Scale
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.NewBatchViewModel
 import com.example.shisuan.utils.CostCalculator
+import com.example.shisuan.utils.formatDateMillis
 import java.io.File
 
 /**
  * 新建/编辑批次页 - 配置原料配料
+ *
+ * 表单输入本身保存在 [NewBatchViewModel] 中（而非此处的 remember），
+ * 因此旋转屏幕等配置变更不会丢失已填写的内容。
  *
  * @param editBatchId 非空表示编辑已有批次
  */
@@ -53,39 +58,54 @@ import java.io.File
 fun NewBatchScreen(
     productId: Long,
     editBatchId: Long? = null,
+    copyFromBatchId: Long? = null,
     onNavigateBack: () -> Unit,
     viewModel: NewBatchViewModel = hiltViewModel()
 ) {
     val isEdit = editBatchId != null
 
-    var batchDateMillis by remember { mutableStateOf<Long?>(null) } // 批次日期（UTC 毫秒）
     var showDatePicker by remember { mutableStateOf(false) }
-    var sampleWeight by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
     var showIngredientPicker by remember { mutableStateOf(false) }
     var showOcrSource by remember { mutableStateOf(false) }
+    var showProcessingCost by remember { mutableStateOf(false) } // 加工费折叠区
 
     val ingredients by viewModel.ingredients.collectAsState()
     val allIngredients by viewModel.allIngredients.collectAsState()
     val totalMaterialCost by viewModel.totalMaterialCost.collectAsState()
-    val editBatchInfo by viewModel.editBatchInfo.collectAsState()
+    val totalProcessingCost by viewModel.totalProcessingCost.collectAsState()
     val ocrScanning by viewModel.ocrScanning.collectAsState()
     val batchNamePreview by viewModel.batchNamePreview.collectAsState()
+    val errorMessage by viewModel.error.collectAsState()
 
-    // 编辑模式：加载批次数据到草稿态
+    // 表单状态来自 ViewModel，配置变更后仍可恢复
+    val sampleWeight by viewModel.sampleWeight.collectAsState()
+    val note by viewModel.note.collectAsState()
+    val batchDateMillis by viewModel.batchDateMillis.collectAsState()
+    val canSubmit by viewModel.canSubmit.collectAsState()
+    val packagingCost by viewModel.packagingCost.collectAsState()
+    val laborCost by viewModel.laborCost.collectAsState()
+    val overheadCost by viewModel.overheadCost.collectAsState()
+    val yieldRate by viewModel.yieldRate.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeError()
+        }
+    }
+
+    // 编辑模式：加载批次数据到草稿态（含表单回填）
     LaunchedEffect(editBatchId) {
         if (editBatchId != null) {
             viewModel.loadBatchForEdit(editBatchId)
         }
     }
 
-    // 批次信息加载完成后预填表单（日期从批次名解析，批次名格式 yyyy-MM-dd-NN）
-    LaunchedEffect(editBatchInfo) {
-        val b = editBatchInfo
-        if (b != null) {
-            sampleWeight = b.sampleWeightGram.toString()
-            note = b.note
-            batchDateMillis = parseDateMillis(b.batchName) ?: toUtcDateMillis(b.createdAt)
+    // 复制模式：以现有批次为模板预填表单（配料/加工费/出品率/备注带入，日期重置为今天）
+    LaunchedEffect(copyFromBatchId) {
+        if (copyFromBatchId != null) {
+            viewModel.copyFromTemplate(copyFromBatchId)
         }
     }
 
@@ -158,7 +178,8 @@ fun NewBatchScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -202,12 +223,96 @@ fun NewBatchScreen(
                     }
                     OutlinedTextField(
                         value = sampleWeight,
-                        onValueChange = { sampleWeight = it },
+                        onValueChange = { viewModel.onSampleWeightChange(it) },
                         label = { Text("样品重量 (g) *") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { viewModel.onNoteChange(it) },
+                        label = { Text("备注（可选）") },
+                        placeholder = { Text("如：本次试产改用新供应商草莓") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    // 出品率：熬煮蒸发使成品少于投料，不折算会低估吨价
+                    OutlinedTextField(
+                        value = yieldRate,
+                        onValueChange = { viewModel.onYieldRateChange(it) },
+                        label = { Text("出品率 %（可选）") },
+                        placeholder = { Text("如 85：投料 1000g 出成品 850g") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    val weightForPreview = sampleWeight.toDoubleOrNull() ?: 0.0
+                    val yieldPreview = yieldRate.toDoubleOrNull() ?: 0.0
+                    if (weightForPreview > 0 && yieldPreview in 0.0001..100.0) {
+                        Text(
+                            "投料 ${"%.2f".format(weightForPreview)}g × ${"%.1f".format(yieldPreview)}% ≈ 成品 ${"%.2f".format(weightForPreview * yieldPreview / 100)}g，成本将按成品重量折算",
+                            fontSize = 12.sp,
+                            color = Foggy
+                        )
+                    }
+                }
+            }
+
+            // 加工费（制造费用）：包材 / 人工 / 水电折旧，默认折叠不增加录入负担
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = CardShape,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showProcessingCost = !showProcessingCost },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "加工费（包材 / 人工 / 水电折旧）",
+                            fontWeight = FontWeight.Medium,
+                            color = Ink
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (showProcessingCost) "收起" else "展开填写",
+                            fontSize = 13.sp,
+                            color = Rausch
+                        )
+                    }
+                    if (showProcessingCost) {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = packagingCost,
+                            onValueChange = { viewModel.onPackagingCostChange(it) },
+                            label = { Text("包材：瓶/盖/标签/外箱 (元)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = laborCost,
+                            onValueChange = { viewModel.onLaborCostChange(it) },
+                            label = { Text("人工 (元)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = overheadCost,
+                            onValueChange = { viewModel.onOverheadCostChange(it) },
+                            label = { Text("水电蒸汽 / 折旧 / 其他 (元)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 
@@ -230,7 +335,7 @@ fun NewBatchScreen(
                         ingredients.forEachIndexed { index, ingredient ->
                             IngredientRow(
                                 ingredient = ingredient,
-                                onDelete = { viewModel.removeIngredient(ingredient) },
+                                onDelete = { viewModel.removeIngredientAt(index) },
                                 isLast = index == ingredients.size - 1
                             )
                         }
@@ -287,6 +392,18 @@ fun NewBatchScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
+                    if (totalProcessingCost > 0.0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("加工费", color = Foggy)
+                            Text(
+                                "¥%,.2f".format(totalProcessingCost),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -294,7 +411,7 @@ fun NewBatchScreen(
                     ) {
                         Text("总成本", fontWeight = FontWeight.Bold)
                         Text(
-                            "¥%,.2f".format(totalMaterialCost),
+                            "¥%,.2f".format(totalMaterialCost + totalProcessingCost),
                             fontWeight = FontWeight.Bold,
                             color = Rausch
                         )
@@ -304,30 +421,18 @@ fun NewBatchScreen(
 
             Button(
                 onClick = {
-                    val weight = sampleWeight.toDoubleOrNull() ?: return@Button
-                    if (batchDateStr.isNullOrBlank()) return@Button
-                    if (weight > 0) {
-                        if (isEdit) {
-                            viewModel.updateBatch(
-                                batchDate = batchDateStr!!,
-                                sampleWeight = weight,
-                                note = note
-                            )
-                        } else {
-                            viewModel.saveBatch(
-                                productId = productId,
-                                batchDate = batchDateStr!!,
-                                sampleWeight = weight,
-                                note = note
-                            )
-                        }
-                        onNavigateBack()
+                    val date = batchDateStr ?: return@Button
+                    if (isEdit) {
+                        viewModel.updateBatch(batchDate = date)
+                    } else {
+                        viewModel.saveBatch(productId = productId, batchDate = date)
                     }
+                    onNavigateBack()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
-                enabled = !batchDateStr.isNullOrBlank() && (sampleWeight.toDoubleOrNull() ?: 0.0) > 0,
+                enabled = canSubmit,
                 shape = ButtonShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Rausch,
@@ -350,21 +455,8 @@ fun NewBatchScreen(
             sampleWeightGram = sampleWeight.toDoubleOrNull() ?: 0.0, // 百分比换算基准
             onDismiss = { showIngredientPicker = false },
             onPick = { ingredient, weight, ratioPercent ->
-                // 单价直接取原料库库存价，不重复填写
-                val price = ingredient.unitPrice
-                viewModel.addIngredient(
-                    BatchIngredient(
-                        batchId = 0, // 保存时再关联
-                        ingredientName = ingredient.name,
-                        ingredientSupplier = ingredient.supplier,
-                        ingredientId = ingredient.id,
-                        weight = weight,
-                        ratioPercent = ratioPercent,
-                        unitPrice = price,
-                        // 元/kg 单价 × 克重 ÷ 1000 —— 由 Rust 引擎换算
-                        totalCost = CostCalculator.unitPriceToTotal(weight, price, isPerGram = false)
-                    )
-                )
+                // 单价与小计较由 ViewModel 内的 BatchIngredient.create 统一换算
+                viewModel.addIngredient(ingredient, weight, ratioPercent)
                 showIngredientPicker = false
             },
             onCreateIngredient = { name, brand, category, price ->
@@ -413,7 +505,7 @@ fun NewBatchScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        datePickerState.selectedDateMillis?.let { batchDateMillis = it }
+                        datePickerState.selectedDateMillis?.let { viewModel.onBatchDateChange(it) }
                         showDatePicker = false
                     }
                 ) { Text("确定") }
@@ -425,37 +517,6 @@ fun NewBatchScreen(
             DatePicker(state = datePickerState)
         }
     }
-}
-
-// ─────────── 批次日期工具 ───────────
-
-/** UTC 毫秒 → yyyy-MM-dd（DatePicker 使用 UTC 午夜） */
-private fun formatDateMillis(utcMillis: Long): String =
-    java.time.Instant.ofEpochMilli(utcMillis)
-        .atZone(java.time.ZoneOffset.UTC)
-        .toLocalDate()
-        .toString()
-
-/** 从批次名解析日期（yyyy-MM-dd-NN），失败返回 null */
-private fun parseDateMillis(batchName: String): Long? {
-    if (batchName.length < 10) return null
-    val datePart = batchName.take(10)
-    return try {
-        java.time.LocalDate.parse(datePart)
-            .atStartOfDay(java.time.ZoneOffset.UTC)
-            .toInstant()
-            .toEpochMilli()
-    } catch (_: Exception) {
-        null
-    }
-}
-
-/** epoch 毫秒（本地时区）→ 该日期 UTC 午夜的毫秒 */
-private fun toUtcDateMillis(epochMillis: Long): Long {
-    val localDate = java.time.Instant.ofEpochMilli(epochMillis)
-        .atZone(java.time.ZoneId.systemDefault())
-        .toLocalDate()
-    return localDate.atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
 }
 
 /**
@@ -488,9 +549,9 @@ private fun IngredientRow(
             )
             Text(
                 if (ingredient.ratioPercent != null) {
-                    "${"%.4f".format(ingredient.ratioPercent)}% · ${"%.4f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg"
+                    "${"%.4f".format(ingredient.ratioPercent)}% · ${"%.4f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 } else {
-                    "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg"
+                    "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 },
                 fontSize = 12.sp,
                 color = Foggy
@@ -668,7 +729,7 @@ fun IngredientPickerSheet(
                                         }
                                         if (ingredient.unitPrice > 0) {
                                             Text(
-                                                " · ¥${"%.2f".format(ingredient.unitPrice)}/kg",
+                                                " · ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}",
                                                 fontSize = 11.sp,
                                                 color = Foggy
                                             )
@@ -741,7 +802,7 @@ fun IngredientPickerSheet(
                     // 单价只读：取原料库库存价，避免重复填写
                     Text(
                         if (ing.unitPrice > 0)
-                            "单价（库存）：¥${"%.2f".format(ing.unitPrice)}/kg"
+                            "单价（库存）：¥${"%.2f".format(ing.unitPrice)}/${ing.priceUnit.removePrefix("元/")}"
                         else "该原料未设置库存单价，成本按 ¥0 计",
                         fontSize = 12.sp,
                         color = Foggy

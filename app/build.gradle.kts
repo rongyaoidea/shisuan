@@ -14,12 +14,31 @@ android {
         applicationId = "com.example.shisuan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "1.5.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            // 启用 R8 代码收缩与资源压缩；keep 规则见 proguard-rules.pro
+            // （JNI native 方法、Room 实体与生成类不可混淆）
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
     }
 
     buildFeatures {
         compose = true
+    }
+
+    // Room schema 导出：供 MigrationTestHelper 校验迁移前后的表结构
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
     }
 
     compileOptions {
