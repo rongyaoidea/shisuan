@@ -32,6 +32,7 @@ import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.viewModel.BackupViewModel
 import com.example.shisuan.ui.viewModel.ProductViewModel
+import com.example.shisuan.utils.WeightFormatter
 import java.time.LocalDate
 
 /**
@@ -322,7 +323,7 @@ fun NewProductDialog(
                     )
                 }
                 Text(
-                    "每箱克数 = $pkgBoxNum × $pkgGramNum = ${"%.0f".format(boxGramComputed)} g（自动计算）",
+                    "每箱克数 = $pkgBoxNum × $pkgGramNum = ${WeightFormatter.format(boxGramComputed)}（自动计算）",
                     fontSize = 12.sp,
                     color = Foggy
                 )

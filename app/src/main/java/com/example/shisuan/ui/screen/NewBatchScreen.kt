@@ -42,6 +42,7 @@ import com.example.shisuan.ui.icons.Scale
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.NewBatchViewModel
 import com.example.shisuan.utils.CostCalculator
+import com.example.shisuan.utils.WeightFormatter
 import com.example.shisuan.utils.formatDateMillis
 import java.io.File
 
@@ -251,7 +252,7 @@ fun NewBatchScreen(
                     val yieldPreview = yieldRate.toDoubleOrNull() ?: 0.0
                     if (weightForPreview > 0 && yieldPreview in 0.0001..100.0) {
                         Text(
-                            "投料 ${"%.2f".format(weightForPreview)}g × ${"%.1f".format(yieldPreview)}% ≈ 成品 ${"%.2f".format(weightForPreview * yieldPreview / 100)}g，成本将按成品重量折算",
+                            "投料 ${WeightFormatter.format(weightForPreview)} × ${"%.1f".format(yieldPreview)}% ≈ 成品 ${WeightFormatter.format(weightForPreview * yieldPreview / 100)}，成本将按成品重量折算",
                             fontSize = 12.sp,
                             color = Foggy
                         )
@@ -549,9 +550,9 @@ private fun IngredientRow(
             )
             Text(
                 if (ingredient.ratioPercent != null) {
-                    "${"%.4f".format(ingredient.ratioPercent)}% · ${"%.4f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
+                    "${"%.4f".format(ingredient.ratioPercent)}% · ${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 } else {
-                    "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
+                    "${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 },
                 fontSize = 12.sp,
                 color = Foggy
@@ -778,7 +779,7 @@ fun IngredientPickerSheet(
                         val pct = weight.toDoubleOrNull() ?: 0.0
                         if (sampleWeightGram > 0 && pct > 0) {
                             Text(
-                                "按样品 ${"%.2f".format(sampleWeightGram)}g 换算 ≈ ${"%.4f".format(CostCalculator.ratioPercentToGram(sampleWeightGram, pct))}g",
+                                "按样品 ${WeightFormatter.format(sampleWeightGram)} 换算 ≈ ${WeightFormatter.format(CostCalculator.ratioPercentToGram(sampleWeightGram, pct))}",
                                 fontSize = 12.sp,
                                 color = Foggy
                             )

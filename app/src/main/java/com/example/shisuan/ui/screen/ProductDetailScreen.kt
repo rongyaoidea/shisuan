@@ -30,6 +30,7 @@ import com.example.shisuan.ui.icons.Jar
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.BatchWithCostUI
 import com.example.shisuan.ui.viewModel.ProductDetailViewModel
+import com.example.shisuan.utils.WeightFormatter
 
 /**
  * 产品详情页 - 成本趋势 + 批次列表（含加工费、建议售价、配料占比）
@@ -227,9 +228,9 @@ fun PackagingSpecCard(product: Product) {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SpecCell("每箱克数", "${"%.0f".format(product.weightPerBoxGram)}g")
+            SpecCell("每箱克数", WeightFormatter.format(product.weightPerBoxGram))
             SpecCell("每箱包数", "${product.packagesPerBox}包")
-            SpecCell("每包克数", "${"%.0f".format(product.weightPerPackageGram)}g")
+            SpecCell("每包克数", WeightFormatter.format(product.weightPerPackageGram))
         }
     }
 }

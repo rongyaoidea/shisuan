@@ -13,6 +13,13 @@
         android:name="android.hardware.camera"
         android:required="false" />
 
+    <!-- Android 11+ 包可见性：声明相机 intent，使 resolveActivity 能正确探测相机应用 -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".ShisuanApplication"
         android:allowBackup="true"
