@@ -347,14 +347,19 @@ fun NewBatchScreen(
     if (showIngredientPicker) {
         IngredientPickerSheet(
             ingredients = allIngredients,
+            sampleWeightGram = sampleWeight.toDoubleOrNull() ?: 0.0, // 百分比换算基准
             onDismiss = { showIngredientPicker = false },
-            onPick = { ingredient, weight, price ->
+            onPick = { ingredient, weight, ratioPercent ->
+                // 单价直接取原料库库存价，不重复填写
+                val price = ingredient.unitPrice
                 viewModel.addIngredient(
                     BatchIngredient(
                         batchId = 0, // 保存时再关联
                         ingredientName = ingredient.name,
+                        ingredientSupplier = ingredient.supplier,
                         ingredientId = ingredient.id,
                         weight = weight,
+                        ratioPercent = ratioPercent,
                         unitPrice = price,
                         // 元/kg 单价 × 克重 ÷ 1000 —— 由 Rust 引擎换算
                         totalCost = CostCalculator.unitPriceToTotal(weight, price, isPerGram = false)
@@ -362,8 +367,8 @@ fun NewBatchScreen(
                 )
                 showIngredientPicker = false
             },
-            onCreateIngredient = { name, category, price ->
-                viewModel.saveIngredient(name, category, price)
+            onCreateIngredient = { name, brand, category, price ->
+                viewModel.saveIngredient(name, brand, category, price)
             },
             onOcrScan = {
                 showOcrSource = true
@@ -470,12 +475,23 @@ private fun IngredientRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                ingredient.ingredientName,
+                buildString {
+                    append(ingredient.ingredientName)
+                    if (ingredient.ingredientSupplier.isNotEmpty()) {
+                        append("（")
+                        append(ingredient.ingredientSupplier)
+                        append("）")
+                    }
+                },
                 fontWeight = FontWeight.Medium,
                 color = Ink
             )
             Text(
-                "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg",
+                if (ingredient.ratioPercent != null) {
+                    "${"%.4f".format(ingredient.ratioPercent)}% · ${"%.4f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg"
+                } else {
+                    "${"%.2f".format(ingredient.weight)}g × ¥${"%.2f".format(ingredient.unitPrice)}/kg"
+                },
                 fontSize = 12.sp,
                 color = Foggy
             )
@@ -502,21 +518,28 @@ private fun IngredientRow(
 /**
  * 原料选择器底部抽屉
  * 支持从原料库选择、快速添加新原料入库、OCR 拍照识别配料表
+ *
+ * 用量支持两种模式：
+ * - 克重 (g)：直接填克重
+ * - 比例 (%)：填占样品重量的百分比（香精/添加剂微量场景），按样品重量换算克重
+ * 单价一律取原料库库存价，不再重复填写。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IngredientPickerSheet(
     ingredients: List<Ingredient>,
+    sampleWeightGram: Double = 0.0,
     onDismiss: () -> Unit,
-    onPick: (Ingredient, Double, Double) -> Unit,
-    onCreateIngredient: (String, String, Double) -> Unit = { _, _, _ -> },
+    onPick: (Ingredient, Double, Double?) -> Unit, // 原料, 克重, 比例%(null=按克重)
+    onCreateIngredient: (String, String, String, Double) -> Unit = { _, _, _, _ -> },
     onOcrScan: () -> Unit = {}
 ) {
     var selected by remember { mutableStateOf<Ingredient?>(null) }
     var weight by remember { mutableStateOf("") }
-    var price by remember { mutableStateOf("") }
+    var usePercent by remember { mutableStateOf(false) }
     var showQuickAdd by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
+    var newBrand by remember { mutableStateOf("") }
     var newCategory by remember { mutableStateOf("") }
     var newPrice by remember { mutableStateOf("") }
 
@@ -558,6 +581,14 @@ fun IngredientPickerSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
+                    value = newBrand,
+                    onValueChange = { newBrand = it },
+                    label = { Text("品牌（可选）") },
+                    placeholder = { Text("留空=不区分品牌") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
                     value = newCategory,
                     onValueChange = { newCategory = it },
                     label = { Text("分类（可选）") },
@@ -587,8 +618,8 @@ fun IngredientPickerSheet(
                         onClick = {
                             val p = newPrice.toDoubleOrNull() ?: 0.0
                             if (newName.isNotBlank()) {
-                                onCreateIngredient(newName.trim(), newCategory.trim(), p)
-                                newName = ""; newCategory = ""; newPrice = ""
+                                onCreateIngredient(newName.trim(), newBrand.trim(), newCategory.trim(), p)
+                                newName = ""; newBrand = ""; newCategory = ""; newPrice = ""
                                 showQuickAdd = false
                             }
                         },
@@ -621,6 +652,13 @@ fun IngredientPickerSheet(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(ingredient.name, fontWeight = FontWeight.Medium)
                                     Row {
+                                        if (ingredient.supplier.isNotEmpty()) {
+                                            Text(
+                                                "${ingredient.supplier} ·",
+                                                fontSize = 11.sp,
+                                                color = Foggy
+                                            )
+                                        }
                                         if (ingredient.category.isNotEmpty()) {
                                             Text(
                                                 ingredient.category,
@@ -650,41 +688,83 @@ fun IngredientPickerSheet(
                     Text("新原料入库")
                 }
 
-                // 用量和单价输入
+                // 用量输入（克重 / 比例两种模式）
                 selected?.let { ing ->
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    // 输入模式切换
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !usePercent,
+                            onClick = { usePercent = false },
+                            label = { Text("克重 (g)", fontSize = 13.sp) }
+                        )
+                        FilterChip(
+                            selected = usePercent,
+                            onClick = { usePercent = true },
+                            label = { Text("比例 (%)", fontSize = 13.sp) }
+                        )
+                    }
+                    if (usePercent) {
+                        OutlinedTextField(
+                            value = weight,
+                            onValueChange = { weight = it },
+                            label = { Text("占样品比例 (%)") },
+                            placeholder = { Text("如 0.05（万分之五）") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        val pct = weight.toDoubleOrNull() ?: 0.0
+                        if (sampleWeightGram > 0 && pct > 0) {
+                            Text(
+                                "按样品 ${"%.2f".format(sampleWeightGram)}g 换算 ≈ ${"%.4f".format(CostCalculator.ratioPercentToGram(sampleWeightGram, pct))}g",
+                                fontSize = 12.sp,
+                                color = Foggy
+                            )
+                        } else if (sampleWeightGram <= 0) {
+                            Text(
+                                "请先在上方填写「样品重量」，才能按比例换算",
+                                fontSize = 12.sp,
+                                color = WarningOrange
+                            )
+                        }
+                    } else {
                         OutlinedTextField(
                             value = weight,
                             onValueChange = { weight = it },
                             label = { Text("用量 (g)") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = price,
-                            onValueChange = { price = it },
-                            label = { Text("单价 (元/kg)") },
-                            placeholder = {
-                                if (ing.unitPrice > 0) Text("库存价 ${"%.2f".format(ing.unitPrice)}")
-                            },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
+                    // 单价只读：取原料库库存价，避免重复填写
+                    Text(
+                        if (ing.unitPrice > 0)
+                            "单价（库存）：¥${"%.2f".format(ing.unitPrice)}/kg"
+                        else "该原料未设置库存单价，成本按 ¥0 计",
+                        fontSize = 12.sp,
+                        color = Foggy
+                    )
                     Button(
                         onClick = {
-                            val w = weight.toDoubleOrNull() ?: return@Button
-                            val p = price.toDoubleOrNull() ?: return@Button
-                            if (w > 0 && p > 0) onPick(ing, w, p)
+                            if (usePercent) {
+                                val pct = weight.toDoubleOrNull() ?: return@Button
+                                if (pct > 0 && sampleWeightGram > 0) {
+                                    val grams = CostCalculator.ratioPercentToGram(sampleWeightGram, pct)
+                                    onPick(ing, grams, pct)
+                                }
+                            } else {
+                                val w = weight.toDoubleOrNull() ?: return@Button
+                                if (w > 0) onPick(ing, w, null)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = (weight.toDoubleOrNull() ?: 0.0) > 0 && (price.toDoubleOrNull() ?: 0.0) > 0,
+                        enabled = if (usePercent) {
+                            (weight.toDoubleOrNull() ?: 0.0) > 0 && sampleWeightGram > 0
+                        } else {
+                            (weight.toDoubleOrNull() ?: 0.0) > 0
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = Rausch)
                     ) {
                         Text("添加")

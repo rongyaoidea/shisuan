@@ -149,29 +149,21 @@ class NewBatchViewModel @Inject constructor(
 
     /**
      * 快速添加原料入库（新建批次页的原料选择器内）
+     * 走配料库去重（名称+品牌）：同名同品牌更新成本，同名不同品牌各自建档
      */
-    fun saveIngredient(name: String, category: String, unitPricePerKg: Double) {
+    fun saveIngredient(name: String, brand: String, category: String, unitPricePerKg: Double) {
         viewModelScope.launch {
-            repo.saveIngredient(
-                Ingredient(
-                    name = name,
-                    category = category,
-                    unitPrice = unitPricePerKg,
-                    priceUnit = "元/kg"
-                )
-            )
+            repo.saveIngredientByNameAndBrand(name, brand, category, unitPricePerKg)
         }
     }
 
     /**
-     * OCR 批量入库：识别出的配料名列表全部加入原料库
+     * OCR 批量入库：识别出的配料名全部加入配料库（去重，品牌留空）
      */
     fun saveIngredientBatch(names: List<String>, category: String = "") {
         viewModelScope.launch {
             names.forEach { name ->
-                repo.saveIngredient(
-                    Ingredient(name = name, category = category, priceUnit = "元/kg")
-                )
+                repo.saveIngredientByNameAndBrand(name, "", category, 0.0)
             }
         }
     }
@@ -300,7 +292,7 @@ class NewBatchViewModel @Inject constructor(
         sampleWeight: Double,
         note: String
     ) {
-        val batchId = _editBatchId.value ?: return
+        if (_editBatchId.value == null) return
         val existing = _editBatchInfo.value ?: return
         viewModelScope.launch {
             val oldDate = existing.batchName.take(10)
@@ -315,11 +307,8 @@ class NewBatchViewModel @Inject constructor(
                 note = note,
                 updatedAt = System.currentTimeMillis()
             )
-            repo.updateBatch(updated)
-            // 全量替换原料明细：先删后插
-            repo.deleteBatchIngredientsByBatchId(batchId)
-            val newIngredients = _ingredients.value.map { it.copy(batchId = batchId, id = 0) }
-            newIngredients.forEach { repo.addIngredientToBatch(it) }
+            // 原子化更新批次 + 全量替换原料明细（单事务，避免成本计算读到中间状态）
+            repo.updateBatchWithIngredients(updated, _ingredients.value)
             _ingredients.value = emptyList()
             _editBatchId.value = null
             _editBatchInfo.value = null

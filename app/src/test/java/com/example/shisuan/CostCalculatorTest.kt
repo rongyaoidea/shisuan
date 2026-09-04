@@ -77,4 +77,17 @@ class CostCalculatorTest {
         val perGram = CostCalculator.unitPriceToTotal(5.0, 0.012, isPerGram = true)
         assertEquals(0.06, perGram, 0.001)
     }
+
+    @Test
+    fun `比例换算克重`() {
+        // 样品 1000g，香精 0.05%（万分之五）→ 0.5g
+        assertEquals(0.5, CostCalculator.ratioPercentToGram(1000.0, 0.05), 0.0001)
+        // 样品 500g，添加剂 0.002% → 0.01g
+        assertEquals(0.01, CostCalculator.ratioPercentToGram(500.0, 0.002), 0.000001)
+        // 100% 即样品全重
+        assertEquals(100.0, CostCalculator.ratioPercentToGram(100.0, 100.0), 0.0001)
+        // 0 边界
+        assertEquals(0.0, CostCalculator.ratioPercentToGram(0.0, 0.05), 0.0)
+        assertEquals(0.0, CostCalculator.ratioPercentToGram(100.0, 0.0), 0.0)
+    }
 }

@@ -6,10 +6,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Room 数据库 - 版本 4
+ * Room 数据库 - 版本 6
  * v2: 新增 Product 表和 BatchIngredient 表
  * v3: Product 增加包装规格字段（weightPerBoxGram/packagesPerBox/weightPerPackageGram）
  * v4: BatchRecord 移除 processingCost（纯物料成本，无加工费）
+ * v5: BatchIngredient 增加 ratioPercent（比例输入原值，null=按克重）
+ * v6: BatchIngredient 增加 ingredientSupplier（品牌冗余字段）
  */
 @Database(
     entities = [
@@ -24,7 +26,7 @@ import kotlinx.coroutines.flow.Flow
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class CostCalDatabase : RoomDatabase() {
@@ -48,7 +50,10 @@ abstract class CostCalDatabase : RoomDatabase() {
                     CostCalDatabase::class.java,
                     "costcal.db"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                    MIGRATION_4_5, MIGRATION_5_6
+                )
                 .build().also { INSTANCE = it }
             }
         }
@@ -145,6 +150,10 @@ interface IngredientDao {
 
     @Query("SELECT * FROM ingredient WHERE id = :id")
     suspend fun getById(id: Long): Ingredient?
+
+    /** 按名称+品牌查活跃原料（配料库去重键：同名同品牌共享一条记录，成本更新最新值） */
+    @Query("SELECT * FROM ingredient WHERE name = :name AND supplier = :brand AND isActive = 1 LIMIT 1")
+    suspend fun getByNameAndBrand(name: String, brand: String): Ingredient?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(ingredient: Ingredient): Long
@@ -363,5 +372,25 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         // 4. 重建索引（Room 按 index_batch_record_* 校验，必须在重命名后重建）
         database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_productId ON batch_record(productId)")
         database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_createdAt ON batch_record(createdAt)")
+    }
+}
+
+/**
+ * 数据库迁移：v4 → v5
+ * BatchIngredient 增加 ratioPercent 列（比例输入原值，null=按克重输入）
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE batch_ingredient ADD COLUMN ratioPercent REAL")
+    }
+}
+
+/**
+ * 数据库迁移：v5 → v6
+ * BatchIngredient 增加 ingredientSupplier 列（品牌冗余，区分同款不同品牌）
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE batch_ingredient ADD COLUMN ingredientSupplier TEXT NOT NULL DEFAULT ''")
     }
 }

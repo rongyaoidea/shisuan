@@ -29,6 +29,7 @@ import com.example.shisuan.ui.icons.Gallery
 import com.example.shisuan.ui.icons.Jar
 import com.example.shisuan.ui.icons.Package
 import com.example.shisuan.ui.icons.Scale
+import com.example.shisuan.ui.icons.categoryIcon
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.theme.Rausch
@@ -42,6 +43,7 @@ import com.example.shisuan.ui.viewModel.ProductViewModel
 @Composable
 fun ProductListScreen(
     onNavigateToDetail: (Long) -> Unit,
+    onNavigateToIngredientLibrary: () -> Unit = {},
     viewModel: ProductViewModel = hiltViewModel()
 ) {
     val products by viewModel.products.collectAsState()
@@ -51,6 +53,11 @@ fun ProductListScreen(
         topBar = {
             TopAppBar(
                 title = { Text("食算", style = MaterialTheme.typography.headlineLarge) },
+                actions = {
+                    IconButton(onClick = onNavigateToIngredientLibrary) {
+                        Icon(Flask, "配料库")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
@@ -126,14 +133,19 @@ fun ProductCard(
                 .padding(20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 产品图标（占位符）
+            // 产品图标（按分类匹配烘焙行业图标）
             Box(
                 modifier = Modifier
                     .size(56.dp)
                     .padding(end = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Jar, null, tint = Foggy, modifier = Modifier.size(32.dp))
+                Icon(
+                    categoryIcon(product.category),
+                    null,
+                    tint = Foggy,
+                    modifier = Modifier.size(32.dp)
+                )
             }
             
             Column(modifier = Modifier.weight(1f)) {

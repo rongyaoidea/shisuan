@@ -98,6 +98,14 @@ object CostCalculator {
         }
     }
 
+    /**
+     * 比例(%) → 克重(g)：按样品重量换算
+     * 香精/添加剂微量场景，如样品 1000g、比例 0.05% → 0.5g
+     */
+    fun ratioPercentToGram(sampleWeightGram: Double, ratioPercent: Double): Double {
+        return sampleWeightGram * ratioPercent / 100.0
+    }
+
     // ─────────── Kotlin 等价实现（回退） ───────────
 
     private fun calculateKotlin(

@@ -71,8 +71,10 @@ data class BatchIngredient(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val batchId: Long, // 外键：关联到 BatchRecord
     val ingredientName: String, // 原料名称（冗余字段，便于显示）
+    val ingredientSupplier: String = "", // 品牌（冗余字段，便于区分同款不同品牌）
     val ingredientId: Long? = null, // 可选：关联到原料库
-    val weight: Double, // 用量(g)
+    val weight: Double, // 用量(g)（百分比输入时已换算为克重）
+    val ratioPercent: Double? = null, // 用户输入比例(%)，null=按克重输入；用于展示原值
     val unitPrice: Double, // 单价(元/g 或 元/kg)
     val priceUnit: String = "元/kg", // 单价单位
     val totalCost: Double = weight * unitPrice, // 小计

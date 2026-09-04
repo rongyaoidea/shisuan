@@ -1,5 +1,6 @@
 package com.example.shisuan.data.repository
 
+import androidx.room.withTransaction
 import com.example.shisuan.data.database.*
 import kotlinx.coroutines.flow.Flow
 
@@ -65,6 +66,21 @@ class CostRepository(private val db: CostCalDatabase) {
     
     suspend fun updateBatch(batch: BatchRecord) = 
         db.batchDao().update(batch)
+
+    /**
+     * 原子化更新批次 + 全量替换原料明细（单事务）
+     * 避免「先改批次再删插原料」被批次流读到中间状态，导致成本计算读到空/旧数据
+     */
+    suspend fun updateBatchWithIngredients(
+        batch: BatchRecord,
+        ingredients: List<BatchIngredient>
+    ) = db.withTransaction {
+        db.batchDao().update(batch)
+        db.batchIngredientDao().deleteByBatch(batch.id)
+        db.batchIngredientDao().insertAll(
+            ingredients.map { it.copy(batchId = batch.id, id = 0) }
+        )
+    }
     
     suspend fun deleteBatch(batch: BatchRecord) {
         db.batchDao().delete(batch)
@@ -110,6 +126,40 @@ class CostRepository(private val db: CostCalDatabase) {
     
     suspend fun saveIngredient(ingredient: Ingredient): Long = 
         db.ingredientDao().insert(ingredient)
+    
+    /**
+     * 按名称+品牌保存原料（配料库去重）：
+     * 同名同品牌已存在时更新其单价为最新值；同名不同品牌各自建档。
+     * 保证同款原料的不同品牌（价格）可以共存，成本始终为最近一次录入的最新值。
+     * @param brand 品牌/供应商，空串表示不区分品牌
+     */
+    suspend fun saveIngredientByNameAndBrand(
+        name: String, brand: String, category: String, unitPricePerKg: Double
+    ): Long {
+        val trimmed = name.trim()
+        val brandTrimmed = brand.trim()
+        val existing = db.ingredientDao().getByNameAndBrand(trimmed, brandTrimmed)
+        return if (existing != null) {
+            db.ingredientDao().update(
+                existing.copy(
+                    category = category.ifEmpty { existing.category },
+                    unitPrice = unitPricePerKg,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            existing.id
+        } else {
+            db.ingredientDao().insert(
+                Ingredient(
+                    name = trimmed,
+                    supplier = brandTrimmed,
+                    category = category,
+                    unitPrice = unitPricePerKg,
+                    priceUnit = "元/kg"
+                )
+            )
+        }
+    }
     
     suspend fun updateIngredient(ingredient: Ingredient) = 
         db.ingredientDao().update(ingredient)
@@ -180,8 +230,8 @@ data class BatchWithCost(
     val batch: BatchRecord,
     val product: Product,
     val ingredients: List<BatchIngredient>,
-    val materialCost: Double, // 原料总成本
-    val totalCost: Double, // 总成本 = 原料 + 加工费
+    val materialCost: Double, // 原料总成本（纯物料，无加工费）
+    val totalCost: Double, // 总成本 = 原料成本
     val result: com.example.shisuan.domain.model.CostResult? = null,
     val previousTonCost: Double? = null
 )

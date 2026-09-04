@@ -330,6 +330,188 @@ val Jar: ImageVector
     }
 private var _jar: ImageVector? = null
 
+/** 奶油（裱花袋造型） */
+val Cream: ImageVector
+    get() {
+        if (_cream != null) return _cream!!
+        _cream = ImageVector.Builder(
+            name = "ShisuanCream", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 袋口弧 + 袋体 + 尖端
+                moveTo(4f, 6f)
+                curveTo(7f, 9f, 17f, 9f, 20f, 6f)
+                lineTo(12f, 21f)
+                close()
+                // 袋身装饰弧
+                moveTo(7f, 8.5f)
+                curveTo(9f, 10.5f, 15f, 10.5f, 17f, 8.5f)
+            }
+        }.build()
+        return _cream!!
+    }
+private var _cream: ImageVector? = null
+
+/** 面包（拱顶 + 切面） */
+val Bread: ImageVector
+    get() {
+        if (_bread != null) return _bread!!
+        _bread = ImageVector.Builder(
+            name = "ShisuanBread", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 拱顶 + 左右 + 底
+                moveTo(4f, 11f)
+                curveTo(4f, 5f, 20f, 5f, 20f, 11f)
+                verticalLineTo(18f)
+                horizontalLineTo(4f)
+                close()
+                // 切面线
+                moveTo(4f, 14f)
+                horizontalLineTo(20f)
+            }
+        }.build()
+        return _bread!!
+    }
+private var _bread: ImageVector? = null
+
+/** 蛋挞皮（碗形塔皮 + 蛋液面） */
+val EggTart: ImageVector
+    get() {
+        if (_eggTart != null) return _eggTart!!
+        _eggTart = ImageVector.Builder(
+            name = "ShisuanEggTart", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 塔口（微弧）+ 两侧 + 底
+                moveTo(4f, 9f)
+                curveTo(4f, 7f, 20f, 7f, 20f, 9f)
+                lineTo(17f, 19f)
+                lineTo(7f, 19f)
+                close()
+                // 蛋液面
+                moveTo(6f, 9.5f)
+                curveTo(6f, 8f, 18f, 8f, 18f, 9.5f)
+            }
+        }.build()
+        return _eggTart!!
+    }
+private var _eggTart: ImageVector? = null
+
+/** 蛋糕（糕体 + 蜡烛 + 火焰） */
+val Cake: ImageVector
+    get() {
+        if (_cake != null) return _cake!!
+        _cake = ImageVector.Builder(
+            name = "ShisuanCake", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 托盘
+                moveTo(3f, 20f)
+                horizontalLineTo(21f)
+                // 糕体
+                moveTo(5f, 20f)
+                verticalLineTo(13f)
+                horizontalLineTo(19f)
+                verticalLineTo(20f)
+                // 顶部奶油装饰弧
+                moveTo(5f, 13f)
+                curveTo(7f, 11.5f, 9f, 14.5f, 11f, 13f)
+                curveTo(13f, 11.5f, 15f, 14.5f, 17f, 13f)
+                curveTo(18f, 12.4f, 19f, 12.6f, 19f, 13f)
+                // 蜡烛
+                moveTo(12f, 13f)
+                verticalLineTo(7f)
+                // 火焰
+                moveTo(12f, 7f)
+                lineTo(10f, 4f)
+                curveTo(10f, 2.5f, 14f, 2.5f, 14f, 4f)
+                close()
+            }
+        }.build()
+        return _cake!!
+    }
+private var _cake: ImageVector? = null
+
+/** 黄油（块 + 分块切痕） */
+val Butter: ImageVector
+    get() {
+        if (_butter != null) return _butter!!
+        _butter = ImageVector.Builder(
+            name = "ShisuanButter", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 黄油块
+                moveTo(5f, 8f)
+                horizontalLineTo(19f)
+                verticalLineTo(19f)
+                horizontalLineTo(5f)
+                close()
+                // 顶部厚度
+                moveTo(5f, 8f)
+                lineTo(7f, 5f)
+                horizontalLineTo(17f)
+                lineTo(19f, 8f)
+                // 分块切痕
+                moveTo(12f, 8f)
+                verticalLineTo(19f)
+            }
+        }.build()
+        return _butter!!
+    }
+private var _butter: ImageVector? = null
+
+/** 饼干（圆饼 + 巧克力碎） */
+val Cookie: ImageVector
+    get() {
+        if (_cookie != null) return _cookie!!
+        _cookie = ImageVector.Builder(
+            name = "ShisuanCookie", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null, stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 圆饼
+                moveTo(5f, 12f)
+                curveTo(5f, 7.5f, 7.5f, 5f, 12f, 5f)
+                curveTo(16.5f, 5f, 19f, 7.5f, 19f, 12f)
+                curveTo(19f, 16.5f, 16.5f, 19f, 12f, 19f)
+                curveTo(7.5f, 19f, 5f, 16.5f, 5f, 12f)
+                // 巧克力碎（小圆点）
+                moveTo(9f, 9.5f)
+                curveTo(9.4f, 9.5f, 9.4f, 9.9f, 9f, 9.9f)
+                moveTo(15f, 10.5f)
+                curveTo(15.4f, 10.5f, 15.4f, 10.9f, 15f, 10.9f)
+                moveTo(12f, 14.5f)
+                curveTo(12.4f, 14.5f, 12.4f, 14.9f, 12f, 14.9f)
+            }
+        }.build()
+        return _cookie!!
+    }
+private var _cookie: ImageVector? = null
+
 /** 日历（批次日期选择） */
 val Calendar: ImageVector
     get() {
@@ -364,3 +546,20 @@ val Calendar: ImageVector
         return _calendar!!
     }
 private var _calendar: ImageVector? = null
+
+/**
+ * 按分类关键词匹配产品/原料图标（烘焙行业）
+ * 未命中时回退到通用罐图标
+ */
+fun categoryIcon(category: String): ImageVector {
+    val c = category.lowercase()
+    return when {
+        c.contains("蛋挞") || c.contains("tart") -> EggTart
+        c.contains("蛋糕") || c.contains("cake") -> Cake
+        c.contains("面包") || c.contains("bread") || c.contains("吐司") -> Bread
+        c.contains("黄油") || c.contains("butter") -> Butter
+        c.contains("奶油") || c.contains("cream") || c.contains("淡奶油") -> Cream
+        c.contains("饼干") || c.contains("cookie") || c.contains("曲奇") -> Cookie
+        else -> Jar
+    }
+}

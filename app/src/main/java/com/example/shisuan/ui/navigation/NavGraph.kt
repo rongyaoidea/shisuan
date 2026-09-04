@@ -24,6 +24,7 @@ sealed class Screen(val route: String) {
     object EditBatch : Screen("products/{productId}/edit_batch/{batchId}") {
         fun createRoute(productId: Long, batchId: Long) = "products/$productId/edit_batch/$batchId"
     }
+    object IngredientLibrary : Screen("ingredient_library")
 }
 
 /**
@@ -43,7 +44,17 @@ fun NavGraph(modifier: Modifier = Modifier) {
             ProductListScreen(
                 onNavigateToDetail = { productId ->
                     navController.navigate(Screen.ProductDetail.createRoute(productId))
+                },
+                onNavigateToIngredientLibrary = {
+                    navController.navigate(Screen.IngredientLibrary.route)
                 }
+            )
+        }
+
+        // 配料库（全局原料管理）
+        composable(Screen.IngredientLibrary.route) {
+            IngredientLibraryScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 
