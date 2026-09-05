@@ -57,6 +57,7 @@ fun ProductListScreen(
     var showNewProductDialog by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf(false) } // 二次确认导入
+    var pendingDeleteProduct by remember { mutableStateOf<Product?>(null) } // 长按删除确认
 
     // 备份操作提示（成功与失败共用）
     val backupMessage by backupViewModel.message.collectAsState()
@@ -119,6 +120,7 @@ fun ProductListScreen(
                     ProductCard(
                         product = product,
                         onClick = { onNavigateToDetail(product.id) },
+                        onLongClick = { pendingDeleteProduct = product },
                         index = index
                     )
                 }
@@ -192,22 +194,46 @@ fun ProductListScreen(
             }
         )
     }
+
+    // 长按产品卡片删除：级联删除批次数据，二次确认
+    pendingDeleteProduct?.let { product ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteProduct = null },
+            title = { Text("删除产品") },
+            text = {
+                Text("确定删除「${product.name}」吗？\n\n该产品的全部批次、配料明细、版本历史与成果记录将一并删除，此操作不可恢复。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDeleteProduct = null
+                        viewModel.deleteProduct(product)
+                    }
+                ) { Text("删除", color = DangerRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteProduct = null }) { Text("取消") }
+            }
+        )
+    }
 }
 
 /**
  * 产品卡片
+ * 长按弹出删除确认（onLongClick 为空时无长按行为）
  */
 @Composable
 fun ProductCard(
     product: Product,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     index: Int = 0
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .pressScale(onClick = onClick)
+            .pressScale(onClick = onClick, onLongClick = onLongClick)
             .entranceAnimation(index = index),
         shape = CardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

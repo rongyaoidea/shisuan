@@ -1,6 +1,8 @@
 package com.example.shisuan.ui.animation
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -40,11 +42,16 @@ object Springs {
 
 /**
  * 按压缩放反馈 — 按下缩小到 0.96，松手弹簧回弹，并触发 onClick
+ *
+ * @param onLongClick 长按回调（可选），用于卡片级辅助操作（如删除入口）；
+ *   与点击共用同一 interactionSource，长按期间同样生效缩放反馈
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Modifier.pressScale(
     onClick: (() -> Unit)? = null,
-    pressedScale: Float = 0.96f
+    pressedScale: Float = 0.96f,
+    onLongClick: (() -> Unit)? = null
 ): Modifier {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -55,11 +62,12 @@ fun Modifier.pressScale(
     )
     return this
         .graphicsLayer { scaleX = scale; scaleY = scale }
-        .clickable(
+        .combinedClickable(
             interactionSource = interactionSource,
             indication = null,
             enabled = true,
-            onClick = { onClick?.invoke() }
+            onClick = { onClick?.invoke() },
+            onLongClick = { onLongClick?.invoke() }
         )
 }
 
