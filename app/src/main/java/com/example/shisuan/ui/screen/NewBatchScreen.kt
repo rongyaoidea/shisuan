@@ -686,7 +686,7 @@ fun IngredientPickerSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
                 TextChipsRow(
-                    options = listOf("水果", "糖类", "添加剂", "乳制品", "包材", "其他"),
+                    options = listOf("水果", "蔬菜", "蛋类", "乳制品", "糖类", "粮油", "添加剂", "包材", "其他"),
                     current = newCategory,
                     onPick = { newCategory = it }
                 )

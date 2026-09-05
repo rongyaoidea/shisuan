@@ -306,7 +306,7 @@ fun NewProductDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 TextChipsRow(
-                    options = listOf("果酱", "酱料", "调味品", "罐头", "烘焙", "其他"),
+                    options = listOf("果酱", "酱料", "调味品", "罐头", "烘焙", "饮料", "乳制品", "糖果零食", "粮油", "速冻", "其他"),
                     current = category,
                     onPick = { category = it }
                 )
