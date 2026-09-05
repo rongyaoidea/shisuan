@@ -77,11 +77,16 @@ class BackupManager @Inject constructor(
                 val dbPath = writableDb().path ?: throw IOException("无法定位数据库文件")
                 db.close()
 
-                // 3. 替换主库文件；连带删除旧 -wal / -shm，避免旧日志污染新数据
-                File(dbPath).delete()
+                // 3. 替换主库文件：先删除旧 -wal / -shm，再用 rename 原子替换。
+                //    cacheDir 与 databases 同属应用私有存储同一分区，rename(2) 是原子操作——
+                //    即使进程在替换瞬间被杀，留下的也是完整的旧库或完整的新库。
+                //    修复：原实现「先 delete 主库再 copyTo」，拷贝中途失败（IO 错误/被杀）
+                //    会导致新旧两份都不可用，用户全部数据丢失。
                 File("$dbPath-wal").delete()
                 File("$dbPath-shm").delete()
-                staging.copyTo(File(dbPath), overwrite = true)
+                if (!staging.renameTo(File(dbPath))) {
+                    throw IOException("恢复数据失败，请重试")
+                }
                 require(File(dbPath).length() > 0) { "恢复数据失败，请重试" }
 
                 // 4. 重启进程：Hilt 单例、Room 连接、内存中的 Flow 全部重建

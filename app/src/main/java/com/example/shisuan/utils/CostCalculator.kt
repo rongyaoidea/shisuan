@@ -132,8 +132,14 @@ object CostCalculator {
         return if (rustAvailable) {
             ShisuanCore.unitPriceToTotal(weightGram, unitPrice, isPerGram)
         } else {
-            val pricePerGram = if (isPerGram) unitPrice else unitPrice / 1000.0
-            round2Kotlin(weightGram * pricePerGram)
+            // 防御与 Rust 版（shisuan-rs calc.rs）对齐：
+            // 无效重量/负单价一律返回 0，避免两条路径对同一输入给出不同结果
+            if (weightGram <= 0.0 || unitPrice < 0.0 || !weightGram.isFinite() || !unitPrice.isFinite()) {
+                0.0
+            } else {
+                val pricePerGram = if (isPerGram) unitPrice else unitPrice / 1000.0
+                round2Kotlin(weightGram * pricePerGram)
+            }
         }
     }
 
@@ -173,6 +179,8 @@ object CostCalculator {
     }
 
     private fun calcDifferentialKotlin(currentTonCost: Double, previousTonCost: Double?): CostDifferential? {
+        // 与 Rust 版对齐：当前值非有限时按「无对比数据」处理，避免 NaN/Inf 进入 UI
+        if (!currentTonCost.isFinite()) return null
         return previousTonCost?.let { prev ->
             if (prev <= 0.0) return null
             val diffAmount = currentTonCost - prev

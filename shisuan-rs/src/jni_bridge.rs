@@ -10,6 +10,7 @@ use jni::sys::{jboolean, jdouble, jdoubleArray, jint, jstring};
 use crate::calc::CostCalculator;
 
 const ERROR_OUT_OF_MEMORY: jint = -2; // 内部保留
+const ERROR_INVALID_ARGS: jint = 2;   // out 数组为 null 或长度不足（Kotlin 侧非 0 即回退实现）
 const OK: jint = 0;
 
 /// 引擎版本号
@@ -37,6 +38,7 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_version(
 //   ): Int
 //
 // out 数组 5 个元素: [克单价, 吨价, 每吨箱数, 箱价, 包价]
+// 返回 0 = 成功，1 = 无效参数（Kotlin 侧非 0 即回退 Kotlin 实现），-2 = 写回失败
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
@@ -65,7 +67,16 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
         result.cost_per_package,
     ];
 
+    // 防御：out 为 null 或长度不足时直接拒绝，避免越界写导致 JVM 崩溃
+    // （Kotlin 契约固定传 DoubleArray(5)，此处只防未来调用方违约）
+    if out.is_null() {
+        return ERROR_INVALID_ARGS;
+    }
     let array = unsafe { JDoubleArray::from_raw(out) };
+    match env.get_array_length(&array) {
+        Ok(len) if (len as usize) >= buf.len() => {}
+        _ => return ERROR_INVALID_ARGS,
+    }
     if env.set_double_array_region(array, 0, &buf).is_err() {
         return ERROR_OUT_OF_MEMORY;
     }
@@ -80,7 +91,7 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
 //
 // previousTonCost <= 0 表示没有上一批次
 // out 数组 3 个元素: [差异百分比, 差异金额, 是否上涨(1.0/0.0)]
-// 返回 0 = 成功计算，1 = 无上一批次可对比
+// 返回 0 = 成功计算，1 = 无上一批次可对比，2 = out 数组无效
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calcDifferential(
@@ -96,7 +107,15 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calcDifferentia
         None
     };
 
+    // 防御：out 为 null 或长度不足时直接拒绝（同 calculate）
+    if out.is_null() {
+        return ERROR_INVALID_ARGS;
+    }
     let array = unsafe { JDoubleArray::from_raw(out) };
+    match env.get_array_length(&array) {
+        Ok(len) if len >= 3 => {}
+        _ => return ERROR_INVALID_ARGS,
+    }
     match CostCalculator::calc_differential(current_ton_cost, prev) {
         Some(diff) => {
             let buf = [

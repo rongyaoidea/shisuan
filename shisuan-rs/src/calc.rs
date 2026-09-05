@@ -71,6 +71,11 @@ impl CostCalculator {
 
     /// 计算与上一批次吨价的差异
     pub fn calc_differential(current_ton: f64, previous_ton: Option<f64>) -> Option<CostDifferential> {
+        // current 非有限（NaN/±Inf）时无法得出有意义的差异，
+        // 返回 None 让上层按「无对比数据」处理，避免 NaN/Inf 直写 UI
+        if !current_ton.is_finite() {
+            return None;
+        }
         let prev = previous_ton?;
         if !prev.is_finite() || prev <= 0.0 {
             return None;

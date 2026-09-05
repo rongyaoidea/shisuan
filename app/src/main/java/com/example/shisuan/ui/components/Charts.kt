@@ -165,36 +165,41 @@ fun IngredientCostDonut(
             }
         }
         Spacer(Modifier.width(16.dp))
-        // 图例：按占比降序
+        // 图例：按占比降序排列，但颜色沿用各配料在扇区绘制时的原始顺序色，
+        // 保证图例色块与环形图扇区一一对应（扇区按 items 原始顺序取色）
         Column(
             modifier = Modifier
                 .weight(1f)
                 .horizontalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items.sortedByDescending { it.second }.forEachIndexed { index, (name, value) ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Canvas(modifier = Modifier.size(10.dp)) {
-                        drawRect(DonutPalette[index % DonutPalette.size])
+            items.withIndex()
+                .sortedByDescending { it.value.second }
+                .forEach { indexedValue ->
+                    val (sectorIndex, item) = indexedValue
+                    val (name, value) = item
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Canvas(modifier = Modifier.size(10.dp)) {
+                            drawRect(DonutPalette[sectorIndex % DonutPalette.size])
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            name,
+                            fontSize = 12.sp,
+                            color = Ink,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.width(88.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "%.0f%%".format(value / total * 100),
+                            fontSize = 12.sp,
+                            color = Foggy,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        name,
-                        fontSize = 12.sp,
-                        color = Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(88.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "%.0f%%".format(value / total * 100),
-                        fontSize = 12.sp,
-                        color = Foggy,
-                        fontWeight = FontWeight.Medium
-                    )
                 }
-            }
         }
     }
 }

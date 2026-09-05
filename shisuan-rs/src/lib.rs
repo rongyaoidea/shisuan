@@ -61,6 +61,10 @@ mod tests {
 
         assert!(CostCalculator::calc_differential(100.0, None).is_none());
         assert!(CostCalculator::calc_differential(100.0, Some(0.0)).is_none());
+        // 非有限输入防御：NaN/Inf 返回 None，不把坏值写进 UI
+        assert!(CostCalculator::calc_differential(f64::NAN, Some(600_000.0)).is_none());
+        assert!(CostCalculator::calc_differential(f64::INFINITY, Some(600_000.0)).is_none());
+        assert!(CostCalculator::calc_differential(700_000.0, Some(f64::NAN)).is_none());
     }
 
     #[test]
