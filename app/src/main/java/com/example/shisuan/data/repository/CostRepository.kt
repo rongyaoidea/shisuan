@@ -15,13 +15,10 @@ class CostRepository(private val db: CostCalDatabase) {
     // ============ Product 产品管理 ============
     
     val allProducts: Flow<List<Product>> = db.productDao().getAllActive()
-    
+
     fun getProductById(id: Long): Flow<Product?> = db.productDao().getById(id)
-    
-    fun getProductsByCategory(category: String): Flow<List<Product>> = 
-        db.productDao().getByCategory(category)
-    
-    suspend fun saveProduct(product: Product): Long = 
+
+    suspend fun saveProduct(product: Product): Long =
         db.productDao().insert(product)
     
     suspend fun updateProduct(product: Product) = 
@@ -34,10 +31,8 @@ class CostRepository(private val db: CostCalDatabase) {
         db.productDao().deactivate(id)
     
     // ============ Batch 批次管理 ============
-    
-    val allBatches: Flow<List<BatchRecord>> = db.batchDao().getAll()
-    
-    fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>> = 
+
+    fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>> =
         db.batchDao().getByProduct(productId)
     
     /**
@@ -173,31 +168,13 @@ class CostRepository(private val db: CostCalDatabase) {
     }
     
     // ============ BatchIngredient 原料明细 ============
-    
-    fun getBatchIngredients(batchId: Long): Flow<List<BatchIngredient>> = 
-        db.batchIngredientDao().getByBatch(batchId)
-    
-    suspend fun getBatchMaterialCost(batchId: Long): Double = 
-        db.batchIngredientDao().getTotalCost(batchId) ?: 0.0
-    
-    suspend fun addIngredientToBatch(ingredient: BatchIngredient): Long = 
-        db.batchIngredientDao().insert(ingredient)
-    
-    suspend fun updateBatchIngredient(ingredient: BatchIngredient) = 
-        db.batchIngredientDao().update(ingredient)
-    
-    suspend fun deleteBatchIngredient(ingredient: BatchIngredient) =
-        db.batchIngredientDao().delete(ingredient)
 
-    suspend fun deleteBatchIngredientsByBatchId(batchId: Long) =
-        db.batchIngredientDao().deleteByBatch(batchId)
-    
+    fun getBatchIngredients(batchId: Long): Flow<List<BatchIngredient>> =
+        db.batchIngredientDao().getByBatch(batchId)
+
     // ============ Ingredient 原料库 ============
-    
+
     val allIngredients: Flow<List<Ingredient>> = db.ingredientDao().getAllActive()
-    
-    fun getIngredientsByCategory(category: String): Flow<List<Ingredient>> = 
-        db.ingredientDao().getByCategory(category)
     
     suspend fun getIngredientById(id: Long): Ingredient? = 
         db.ingredientDao().getById(id)
@@ -221,7 +198,9 @@ class CostRepository(private val db: CostCalDatabase) {
             db.ingredientDao().update(
                 existing.copy(
                     category = category.ifEmpty { existing.category },
-                    unitPrice = unitPricePerKg,
+                    // 关键：0 表示「本次未填写/OCR 未识别到价格」，绝不能覆盖已有单价，
+                    // 否则 OCR 重复识别会把原料价格静默清零，成本随之算错
+                    unitPrice = preservedUnitPrice(unitPricePerKg, existing.unitPrice),
                     updatedAt = System.currentTimeMillis()
                 )
             )
@@ -263,51 +242,36 @@ class CostRepository(private val db: CostCalDatabase) {
         db.ingredientDao().delete(ingredient)
     
     // ============ BatchResult 批次成果 ============
-    
-    fun getBatchResult(batchId: Long): Flow<BatchResult?> = 
+
+    fun getBatchResult(batchId: Long): Flow<BatchResult?> =
         db.batchResultDao().getByBatch(batchId)
-    
-    suspend fun saveResult(result: BatchResult) = 
-        db.batchResultDao().insert(result)
-    
-    suspend fun updateResult(result: BatchResult) = 
-        db.batchResultDao().update(result)
-    
-    // ============ BatchProblem 问题记录 ============
-    
-    fun getBatchProblems(batchId: Long): Flow<List<BatchProblem>> = 
-        db.batchProblemDao().getByBatch(batchId)
-    
-    suspend fun saveProblem(problem: BatchProblem) = 
-        db.batchProblemDao().insert(problem)
-    
-    suspend fun updateProblem(problem: BatchProblem) = 
-        db.batchProblemDao().update(problem)
-    
-    suspend fun deleteProblem(problem: BatchProblem) = 
-        db.batchProblemDao().delete(problem)
-    
+
+    /**
+     * 保存批次成果：存在则更新，否则新增（单事务 upsert）。
+     * 口感/pH/糖度等试产结果与成本数据关联，用于「好且便宜」的配方复盘。
+     */
+    suspend fun saveOrUpdateResult(result: BatchResult) = db.withTransaction {
+        val existing = db.batchResultDao().getByBatchOnce(result.batchId)
+        if (existing == null) {
+            db.batchResultDao().insert(result)
+        } else {
+            db.batchResultDao().update(result.copy(id = existing.id))
+        }
+    }
+
     // ============ Snapshot 快照 ============
     
-    fun getBatchSnapshots(batchId: Long): Flow<List<BatchSnapshot>> = 
+    fun getBatchSnapshots(batchId: Long): Flow<List<BatchSnapshot>> =
         db.snapshotDao().getByBatch(batchId)
-    
-    suspend fun saveSnapshot(snapshot: BatchSnapshot) = 
-        db.snapshotDao().insert(snapshot)
-    
-    // ============ OperationLog 操作日志 ============
-    
-    val recentLogs: Flow<List<OperationLog>> = db.logDao().getRecent()
-    
-    suspend fun log(operationType: String, targetType: String, targetId: Long, details: String) {
-        db.logDao().insert(
-            OperationLog(
-                operationType = operationType,
-                targetType = targetType,
-                targetId = targetId,
-                details = details
-            )
-        )
+
+    companion object {
+        /**
+         * 名称+品牌 upsert 时的单价取舍：
+         * 新价 > 0 视为本次录入的最新价；新价 = 0（未填写/OCR 未识别）保留旧价。
+         * 纯函数，便于单元测试防止回归（见 IngredientPriceTest）。
+         */
+        fun preservedUnitPrice(incomingPrice: Double, existingPrice: Double): Double =
+            if (incomingPrice > 0.0) incomingPrice else existingPrice
     }
 }
 

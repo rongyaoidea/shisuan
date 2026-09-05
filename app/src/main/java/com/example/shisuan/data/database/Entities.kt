@@ -48,7 +48,12 @@ data class Product(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["productId"]), Index(value = ["createdAt"])]
+    indices = [
+        Index(value = ["productId"]),
+        Index(value = ["createdAt"]),
+        // 批次号唯一约束：generateBatchName「先查后插」的并发兜底（v9 迁移创建）
+        Index(value = ["productId", "batchName"], unique = true)
+    ]
 )
 data class BatchRecord(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -189,26 +194,6 @@ data class BatchResult(
     val packagingResult: String? = null,
     val overallRating: Int? = null,
     val recordedAt: Long = System.currentTimeMillis()
-)
-
-/**
- * 批次问题记录表 - 保持不变
- */
-@Entity(
-    tableName = "batch_problem",
-    foreignKeys = [ForeignKey(entity = BatchRecord::class, parentColumns = ["id"], childColumns = ["batchId"], onDelete = ForeignKey.CASCADE)],
-    indices = [Index(value = ["batchId"])]
-)
-data class BatchProblem(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val batchId: Long,
-    val category: String,
-    val description: String,
-    val cause: String? = null,
-    val solution: String? = null,
-    val resolved: Boolean = false,
-    val resolvedAt: Long? = null,
-    val createdAt: Long = System.currentTimeMillis()
 )
 
 /**

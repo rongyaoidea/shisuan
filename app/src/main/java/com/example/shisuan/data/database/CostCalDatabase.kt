@@ -6,7 +6,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Room 数据库 - 版本 7
+ * Room 数据库 - 版本 9
  * v2: 新增 Product 表和 BatchIngredient 表
  * v3: Product 增加包装规格字段（weightPerBoxGram/packagesPerBox/weightPerPackageGram）
  * v4: BatchRecord 移除 processingCost（纯物料成本，无加工费）
@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
  * v7: BatchRecord 恢复加工费分项（packaging/labor/overhead）与出品率 yieldRatePercent；
  *     Product 增加 targetMarginRate；删除废弃表 unit_config / batch_material
  * v8: BatchSnapshot 增加 digest（唯一变更编号）与 (batchId, digest) 唯一索引 —— git 式版本链
+ * v9: batch_record 增加 (productId, batchName) 唯一索引（批次号并发兜底）；
+ *     删除自始至终无 UI 入口的 batch_problem 表
  */
 @Database(
     entities = [
@@ -23,11 +25,10 @@ import kotlinx.coroutines.flow.Flow
         BatchIngredient::class,
         Ingredient::class,
         BatchResult::class,
-        BatchProblem::class,
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 8,
+    version = 9,
     // 导出 schema 以支持迁移测试：schema JSON 位于 app/schemas/
     exportSchema = true
 )
@@ -37,13 +38,12 @@ abstract class CostCalDatabase : RoomDatabase() {
     abstract fun batchIngredientDao(): BatchIngredientDao
     abstract fun ingredientDao(): IngredientDao
     abstract fun batchResultDao(): BatchResultDao
-    abstract fun batchProblemDao(): BatchProblemDao
     abstract fun snapshotDao(): SnapshotDao
     abstract fun logDao(): LogDao
 
     companion object {
         /** 当前应用支持的 schema 版本；恢复备份时用于拒绝来自更高版本的文件 */
-        const val SUPPORTED_DB_VERSION = 8
+        const val SUPPORTED_DB_VERSION = 9
 
         @Volatile private var INSTANCE: CostCalDatabase? = null
         fun getInstance(context: android.content.Context): CostCalDatabase {
@@ -55,7 +55,8 @@ abstract class CostCalDatabase : RoomDatabase() {
                 )
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
-                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                    MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                    MIGRATION_7_8, MIGRATION_8_9
                 )
                 .build().also { INSTANCE = it }
             }
@@ -73,10 +74,9 @@ interface ProductDao {
     @Query("SELECT * FROM product WHERE id = :id")
     fun getById(id: Long): Flow<Product?>
 
-    @Query("SELECT * FROM product WHERE category = :category AND isActive = 1")
-    fun getByCategory(category: String): Flow<List<Product>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // insert 用 ABORT（默认）而非 REPLACE：REPLACE 对已有 id 会「先删后插」，
+    // 触发 product 的 ON DELETE CASCADE 级联清空该产品全部批次 —— 数据安全红线
+    @Insert
     suspend fun insert(product: Product): Long
 
     @Update
@@ -103,9 +103,6 @@ data class BatchWithIngredients(
 
 @Dao
 interface BatchDao {
-    @Query("SELECT * FROM batch_record ORDER BY createdAt DESC")
-    fun getAll(): Flow<List<BatchRecord>>
-
     @Query("SELECT * FROM batch_record WHERE productId = :productId ORDER BY createdAt DESC")
     fun getByProduct(productId: Long): Flow<List<BatchRecord>>
 
@@ -119,7 +116,8 @@ interface BatchDao {
     @Query("SELECT * FROM batch_record WHERE id = :id")
     fun getById(id: Long): Flow<BatchRecord?>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // ABORT 语义见 ProductDao.insert 注释；批次号冲突由 (productId, batchName) 唯一索引拦截
+    @Insert
     suspend fun insert(batch: BatchRecord): Long
 
     @Update
@@ -133,12 +131,6 @@ interface BatchDao {
 interface BatchIngredientDao {
     @Query("SELECT * FROM batch_ingredient WHERE batchId = :batchId")
     fun getByBatch(batchId: Long): Flow<List<BatchIngredient>>
-
-    @Query("SELECT SUM(totalCost) FROM batch_ingredient WHERE batchId = :batchId")
-    suspend fun getTotalCost(batchId: Long): Double?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(ingredient: BatchIngredient): Long
 
     @Insert
     suspend fun insertAll(ingredients: List<BatchIngredient>)
@@ -158,9 +150,6 @@ interface IngredientDao {
     @Query("SELECT * FROM ingredient WHERE isActive = 1 ORDER BY name")
     fun getAllActive(): Flow<List<Ingredient>>
 
-    @Query("SELECT * FROM ingredient WHERE category = :category AND isActive = 1")
-    fun getByCategory(category: String): Flow<List<Ingredient>>
-
     @Query("SELECT * FROM ingredient WHERE id = :id")
     suspend fun getById(id: Long): Ingredient?
 
@@ -168,7 +157,7 @@ interface IngredientDao {
     @Query("SELECT * FROM ingredient WHERE name = :name AND supplier = :brand AND isActive = 1 LIMIT 1")
     suspend fun getByNameAndBrand(name: String, brand: String): Ingredient?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert
     suspend fun insert(ingredient: Ingredient): Long
 
     @Update
@@ -183,26 +172,14 @@ interface BatchResultDao {
     @Query("SELECT * FROM batch_result WHERE batchId = :batchId")
     fun getByBatch(batchId: Long): Flow<BatchResult?>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Query("SELECT * FROM batch_result WHERE batchId = :batchId LIMIT 1")
+    suspend fun getByBatchOnce(batchId: Long): BatchResult?
+
+    @Insert
     suspend fun insert(result: BatchResult)
 
     @Update
     suspend fun update(result: BatchResult)
-}
-
-@Dao
-interface BatchProblemDao {
-    @Query("SELECT * FROM batch_problem WHERE batchId = :batchId ORDER BY createdAt DESC")
-    fun getByBatch(batchId: Long): Flow<List<BatchProblem>>
-
-    @Insert
-    suspend fun insert(problem: BatchProblem)
-
-    @Update
-    suspend fun update(problem: BatchProblem)
-
-    @Delete
-    suspend fun delete(problem: BatchProblem)
 }
 
 @Dao
@@ -225,9 +202,6 @@ interface SnapshotDao {
 
 @Dao
 interface LogDao {
-    @Query("SELECT * FROM operation_log ORDER BY createdAt DESC LIMIT 100")
-    fun getRecent(): Flow<List<OperationLog>>
-
     @Insert
     suspend fun insert(log: OperationLog)
 }
@@ -261,36 +235,10 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
             GROUP BY productName
         """.trimIndent())
 
-        // 3. 创建新的 batch_record 表结构
-        database.execSQL("""
-            CREATE TABLE IF NOT EXISTS batch_record_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                productId INTEGER NOT NULL,
-                batchName TEXT NOT NULL,
-                sampleWeightGram REAL NOT NULL,
-                processingCost REAL NOT NULL DEFAULT 0.0,
-                note TEXT NOT NULL DEFAULT '',
-                createdAt INTEGER NOT NULL,
-                updatedAt INTEGER NOT NULL,
-                FOREIGN KEY(productId) REFERENCES product(id) ON DELETE CASCADE
-            )
-        """.trimIndent())
-        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_productId ON batch_record_new(productId)")
-        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_createdAt ON batch_record_new(createdAt)")
-
-        // 4. 迁移数据：batch_record → batch_record_new，关联 productId
-        database.execSQL("""
-            INSERT INTO batch_record_new (id, productId, batchName, sampleWeightGram, processingCost, note, createdAt, updatedAt)
-            SELECT br.id, p.id, br.batchName, br.sampleWeightGram, br.processingCost, br.note, br.createdAt, br.updatedAt
-            FROM batch_record br
-            INNER JOIN product p ON br.productName = p.name
-        """.trimIndent())
-
-        // 5. 删除旧表，重命名新表
-        database.execSQL("DROP TABLE batch_record")
-        database.execSQL("ALTER TABLE batch_record_new RENAME TO batch_record")
-
-        // 6. 创建 BatchIngredient 表（新增原料明细）
+        // 3. 创建 BatchIngredient 表。
+        //    注意顺序：必须在此之前创建并完成第 4 步旧 materialCost 数据迁移 ——
+        //    一旦执行完第 7 步的 DROP/RENAME，materialCost 列就不复存在，
+        //    再引用它会让迁移在语句预编译期直接失败（v1 老用户升级即崩溃的修复）。
         database.execSQL("""
             CREATE TABLE IF NOT EXISTS batch_ingredient (
                 id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -307,12 +255,42 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         """.trimIndent())
         database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_ingredient_batchId ON batch_ingredient(batchId)")
 
-        // 7. 将旧的 materialCost 转为单条原料记录（兼容处理）
+        // 4. 将旧的 materialCost 转为单条原料记录（兼容处理）。
+        //    过滤 sampleWeightGram <= 0 的脏数据，避免除零产生 NULL 违反 NOT NULL 约束。
         database.execSQL("""
             INSERT INTO batch_ingredient (batchId, ingredientName, weight, unitPrice, totalCost)
             SELECT id, '原料总成本(迁移)', sampleWeightGram, materialCost / sampleWeightGram, materialCost
-            FROM (SELECT id, sampleWeightGram, materialCost FROM batch_record WHERE materialCost > 0)
+            FROM batch_record WHERE materialCost > 0 AND sampleWeightGram > 0
         """.trimIndent())
+
+        // 5. 创建新的 batch_record 表结构
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS batch_record_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                productId INTEGER NOT NULL,
+                batchName TEXT NOT NULL,
+                sampleWeightGram REAL NOT NULL,
+                processingCost REAL NOT NULL DEFAULT 0.0,
+                note TEXT NOT NULL DEFAULT '',
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL,
+                FOREIGN KEY(productId) REFERENCES product(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_productId ON batch_record_new(productId)")
+        database.execSQL("CREATE INDEX IF NOT EXISTS index_batch_record_createdAt ON batch_record_new(createdAt)")
+
+        // 6. 迁移数据：batch_record → batch_record_new，关联 productId
+        database.execSQL("""
+            INSERT INTO batch_record_new (id, productId, batchName, sampleWeightGram, processingCost, note, createdAt, updatedAt)
+            SELECT br.id, p.id, br.batchName, br.sampleWeightGram, br.processingCost, br.note, br.createdAt, br.updatedAt
+            FROM batch_record br
+            INNER JOIN product p ON br.productName = p.name
+        """.trimIndent())
+
+        // 7. 删除旧表，重命名新表
+        database.execSQL("DROP TABLE batch_record")
+        database.execSQL("ALTER TABLE batch_record_new RENAME TO batch_record")
     }
 }
 
@@ -436,9 +414,36 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
 val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL("ALTER TABLE batch_snapshot ADD COLUMN digest TEXT NOT NULL DEFAULT ''")
+        // v7 存量快照没有内容指纹：先回填基于行 id 的唯一占位值再建唯一索引。
+        // 否则同一批次的多条快照 digest 同为 ''，CREATE UNIQUE INDEX 直接失败。
+        database.execSQL("UPDATE batch_snapshot SET digest = 'legacy-' || id")
         database.execSQL(
             "CREATE UNIQUE INDEX IF NOT EXISTS index_batch_snapshot_batchId_digest " +
                 "ON batch_snapshot(batchId, digest)"
         )
+    }
+}
+
+/**
+ * 数据库迁移：v8 → v9
+ * 1. batch_record 增加 (productId, batchName) 唯一索引，为批次号「先查后插」
+ *    的并发窗口兜底；建索引前把历史重名批次保留最早一条、其余追加 id 后缀
+ * 2. 删除 batch_problem 表 —— 自 v1 起无任何 UI 入口，从未产生用户数据
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 重名批次去重：NOT IN 每组最小 id 即「组内除第一条外的重复行」
+        database.execSQL(
+            "UPDATE batch_record SET batchName = batchName || '#' || id " +
+                "WHERE id NOT IN " +
+                "(SELECT MIN(id) FROM batch_record GROUP BY productId, batchName)"
+        )
+        // 2. 唯一索引（与 BatchRecord 实体声明一致，Room 校验 schema 用）
+        database.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS index_batch_record_productId_batchName " +
+                "ON batch_record(productId, batchName)"
+        )
+        // 3. 移除无 UI 的表
+        database.execSQL("DROP TABLE IF EXISTS batch_problem")
     }
 }

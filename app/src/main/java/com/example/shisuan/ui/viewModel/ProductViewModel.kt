@@ -6,6 +6,7 @@ import com.example.shisuan.data.database.*
 import com.example.shisuan.data.repository.CostRepository
 import com.example.shisuan.data.repository.IngredientUpsert
 import com.example.shisuan.domain.model.CostResult
+import com.example.shisuan.utils.BatchSnapshotCodec
 import com.example.shisuan.utils.CostCalculator
 import com.example.shisuan.utils.parseBatchDateMillis
 import com.example.shisuan.utils.toUtcDateMillis
@@ -159,12 +160,50 @@ class ProductDetailViewModel @Inject constructor(
         else repo.getBatchSnapshots(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * 当前批次内容的内容指纹。
+     * 时间线的「当前」标记按它与各快照的 digest 匹配——恢复到旧版本后，
+     * 「当前」应指向内容一致的旧版本，而不是版本号最大的那条。
+     */
+    val historyCurrentDigest: StateFlow<String?> =
+        combine(_historyBatchId, batchesWithCost) { batchId, rows ->
+            rows.firstOrNull { it.batch.id == batchId }?.let {
+                BatchSnapshotCodec.digest(it.batch, it.ingredients)
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     fun showHistory(batchId: Long) {
         _historyBatchId.value = batchId
     }
 
     fun dismissHistory() {
         _historyBatchId.value = null
+    }
+
+    // ─────────── 批次成果记录（口感/pH/糖度/评分） ───────────
+
+    private val _outcomeBatchId = MutableStateFlow<Long?>(null)
+    val outcomeBatchId: StateFlow<Long?> = _outcomeBatchId.asStateFlow()
+
+    /** 正在记录成果的批次的已有成果，null = 从未记录 */
+    val batchResult: StateFlow<BatchResult?> = _outcomeBatchId.flatMapLatest { id ->
+        if (id == null) flowOf(null)
+        else repo.getBatchResult(id)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun showOutcome(batchId: Long) {
+        _outcomeBatchId.value = batchId
+    }
+
+    fun dismissOutcome() {
+        _outcomeBatchId.value = null
+    }
+
+    fun saveOutcome(result: BatchResult) {
+        launchSafe {
+            repo.saveOrUpdateResult(result)
+            _outcomeBatchId.value = null
+        }
     }
 
     /**
@@ -350,16 +389,28 @@ class NewBatchViewModel @Inject constructor(
     val ocrScanning: StateFlow<Boolean> = _ocrScanning.asStateFlow()
 
     /**
-     * OCR 识别配料表图片，识别结果批量入库
+     * OCR 识别配料表图片，识别结果批量入库。
+     *
+     * 三种结果都有明确反馈：
+     * - 识别成功有配料 → 入库
+     * - 识别成功但无配料 → 提示重拍
+     * - 识别失败 → 提示失败原因（OcrAnalyzer 不再吞异常）
      */
     fun recognizeIngredients(uri: android.net.Uri, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             _ocrScanning.value = true
             try {
-                val names = ocrAnalyzer.recognizeIngredientNames(uri)
-                if (names.isNotEmpty()) {
-                    repo.saveIngredients(names.map { IngredientUpsert(name = it) })
-                }
+                ocrAnalyzer.recognizeIngredientNames(uri)
+                    .onSuccess { names ->
+                        if (names.isNotEmpty()) {
+                            repo.saveIngredients(names.map { IngredientUpsert(name = it) })
+                        } else {
+                            showError("没有识别到配料文字，请重拍或换一张更清晰的照片")
+                        }
+                    }
+                    .onFailure {
+                        showError("识别失败：${it.userMessage()}")
+                    }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -374,19 +425,36 @@ class NewBatchViewModel @Inject constructor(
     /**
      * 保存新批次。样品重量、备注、加工费、出品率均从 ViewModel 表单状态读取。
      *
+     * 保存发生在 viewModelScope（跨配置变更存活），完成后经 [onResult] 回调；
+     * UI 只在成功时导航返回 —— 修复「点保存立即弹栈，协程被取消导致静默丢单」：
+     * 失败时页面保留，错误经 Snackbar 提示。
+     *
      * @param batchDate 批次日期 yyyy-MM-dd，批次名自动生成为「日期-序号」
      */
     fun saveBatch(
         productId: Long,
-        batchDate: String
+        batchDate: String,
+        onResult: (Boolean) -> Unit = {}
     ) {
+        if (_saving.value) return
         val weight = parsedSampleWeight ?: return
         val ingredientsSnapshot = _ingredients.value
         val draft = buildBatchDraft(productId, weight)
-        launchSafe {
-            val batchName = generateBatchName(productId, batchDate)
-            repo.saveBatchWithIngredients(draft.copy(batchName = batchName), ingredientsSnapshot)
-            resetForm()
+        _saving.value = true
+        viewModelScope.launch {
+            val ok = try {
+                val batchName = generateBatchName(productId, batchDate)
+                repo.saveBatchWithIngredients(draft.copy(batchName = batchName), ingredientsSnapshot)
+                resetForm()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                showError(e.userMessage())
+                false
+            }
+            _saving.value = false
+            onResult(ok)
         }
     }
 
@@ -447,18 +515,32 @@ class NewBatchViewModel @Inject constructor(
     }
 
     /**
-     * 加载现有批次到草稿态用于编辑
+     * 已成功加载进草稿态的批次 id（编辑模式）与复制来源 id（复制模式）。
      *
-     * 同时回填表单字段，使配置变更后用户已修改的内容仍可恢复。
+     * Composable 在每次旋转等配置变更后重新进入组合，LaunchedEffect 会再次触发；
+     * 若不设守卫，loadBatchForEdit/copyFromTemplate 会用数据库旧值覆盖用户
+     * 已修改未保存的表单——「状态存 ViewModel 防丢失」的前提是这里不再重复加载。
+     */
+    private var loadedEditBatchId: Long? = null
+    private var copiedFromBatchId: Long? = null
+
+    /**
+     * 加载现有批次到草稿态用于编辑。
+     *
+     * 同时回填表单字段，使配置变更后用户已修改的内容仍可恢复；
+     * 同一批次只加载一次，之后以 ViewModel 草稿为准。
      */
     fun loadBatchForEdit(batchId: Long) {
+        if (loadedEditBatchId == batchId) return
         _editBatchId.value = batchId
         launchSafe {
             val batch = repo.getBatchById(batchId).first()
-            _editBatchInfo.value = batch
-            if (batch != null) {
-                fillFormFrom(batch, repo.getBatchIngredients(batchId).first())
+            if (batch == null) {
+                showError("要编辑的批次不存在或已被删除")
+                return@launchSafe
             }
+            loadedEditBatchId = batchId
+            fillFormFrom(batch, repo.getBatchIngredients(batchId).first())
         }
     }
 
@@ -467,8 +549,10 @@ class NewBatchViewModel @Inject constructor(
      * 日期重置为今天，批次号按今天重新生成。
      *
      * 试产迭代时 80% 的配料不变，只调整一两种 —— 以此替代逐项重录。
+     * 同一来源批次只加载一次，防止配置变更后草稿被重置。
      */
     fun copyFromTemplate(templateBatchId: Long) {
+        if (copiedFromBatchId == templateBatchId) return
         launchSafe {
             val batch = repo.getBatchById(templateBatchId).first()
             if (batch == null) {
@@ -480,6 +564,7 @@ class NewBatchViewModel @Inject constructor(
             _editBatchId.value = null
             _editBatchInfo.value = null
             _batchDateMillis.value = toUtcDateMillis(System.currentTimeMillis())
+            copiedFromBatchId = templateBatchId
         }
     }
 
@@ -499,46 +584,65 @@ class NewBatchViewModel @Inject constructor(
     fun clearEditMode() {
         _editBatchId.value = null
         _editBatchInfo.value = null
+        loadedEditBatchId = null
+        copiedFromBatchId = null
         resetForm()
     }
 
     /**
-     * 更新批次：替换批次记录 + 全量替换原料明细
+     * 更新批次：替换批次记录 + 全量替换原料明细。
      * 样品重量、备注、加工费、出品率从 ViewModel 表单状态读取。
+     *
+     * 与 [saveBatch] 相同：完成后再经 [onResult] 回调导航，失败留在本页。
      *
      * @param batchDate 日期 yyyy-MM-dd；与原名日期相同时保留原序号
      */
-    fun updateBatch(batchDate: String) {
-        if (_editBatchId.value == null) return
-        val existing = _editBatchInfo.value ?: return
+    fun updateBatch(batchDate: String, onResult: (Boolean) -> Unit = {}) {
+        if (_saving.value) return
+        val existing = _editBatchInfo.value ?: run { onResult(false); return }
         val weight = parsedSampleWeight ?: return
         val ingredientsSnapshot = _ingredients.value
-        launchSafe {
-            val oldDate = existing.batchName.take(10)
-            val batchName = if (oldDate == batchDate) {
-                existing.batchName // 日期未变，保留原批次名
-            } else {
-                generateBatchName(existing.productId, batchDate)
+        _saving.value = true
+        viewModelScope.launch {
+            val ok = try {
+                val oldDate = existing.batchName.take(10)
+                val batchName = if (oldDate == batchDate) {
+                    existing.batchName // 日期未变，保留原批次名
+                } else {
+                    generateBatchName(existing.productId, batchDate)
+                }
+                val updated = existing.copy(
+                    batchName = batchName,
+                    sampleWeightGram = weight,
+                    packagingCost = parsedPackagingCost,
+                    laborCost = parsedLaborCost,
+                    overheadCost = parsedOverheadCost,
+                    yieldRatePercent = parsedYieldRate,
+                    note = _note.value,
+                    updatedAt = System.currentTimeMillis()
+                )
+                // 原子化更新批次 + 全量替换原料明细（单事务，避免成本计算读到中间状态）
+                repo.updateBatchWithIngredients(updated, ingredientsSnapshot)
+                _editBatchId.value = null
+                _editBatchInfo.value = null
+                resetForm()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                showError(e.userMessage())
+                false
             }
-            val updated = existing.copy(
-                batchName = batchName,
-                sampleWeightGram = weight,
-                packagingCost = parsedPackagingCost,
-                laborCost = parsedLaborCost,
-                overheadCost = parsedOverheadCost,
-                yieldRatePercent = parsedYieldRate,
-                note = _note.value,
-                updatedAt = System.currentTimeMillis()
-            )
-            // 原子化更新批次 + 全量替换原料明细（单事务，避免成本计算读到中间状态）
-            repo.updateBatchWithIngredients(updated, ingredientsSnapshot)
-            _editBatchId.value = null
-            _editBatchInfo.value = null
-            resetForm()
+            _saving.value = false
+            onResult(ok)
         }
     }
 
-    /** 清空表单与配料草稿 */
+    /** 保存进行中：防止双击重复提交，UI 据此禁用按钮 */
+    private val _saving = MutableStateFlow(false)
+    val saving: StateFlow<Boolean> = _saving.asStateFlow()
+
+    /** 清空表单与配料草稿（保存成功或主动退出编辑时调用） */
     private fun resetForm() {
         _ingredients.value = emptyList()
         _sampleWeight.value = ""
@@ -549,6 +653,8 @@ class NewBatchViewModel @Inject constructor(
         _yieldRate.value = ""
         _batchDateMillis.value = null
         _batchNamePreview.value = ""
+        loadedEditBatchId = null
+        copiedFromBatchId = null
     }
 }
 

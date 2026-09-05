@@ -15,6 +15,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
+import com.example.shisuan.ui.components.StepperNumberField
+import com.example.shisuan.ui.components.TextChipsRow
 import com.example.shisuan.ui.icons.Add
 import com.example.shisuan.ui.icons.ArrowBack
 import com.example.shisuan.ui.icons.Delete
@@ -240,13 +242,18 @@ private fun IngredientEditDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
+                TextChipsRow(
+                    options = listOf("水果", "糖类", "添加剂", "乳制品", "包材", "其他"),
+                    current = category,
+                    onPick = { category = it }
+                )
+                StepperNumberField(
                     value = price,
                     onValueChange = { price = it },
-                    label = { Text("单价 (元/kg)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
+                    label = "参考单价",
+                    step = 0.5,
+                    suffix = "元/kg",
+                    placeholder = "如 12.5"
                 )
             }
         },

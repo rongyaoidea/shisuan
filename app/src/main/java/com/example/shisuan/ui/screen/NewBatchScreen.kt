@@ -28,6 +28,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.data.database.BatchIngredient
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
+import com.example.shisuan.ui.components.QuickChipsRow
+import com.example.shisuan.ui.components.SliderNumberField
+import com.example.shisuan.ui.components.StepperNumberField
+import com.example.shisuan.ui.components.TextChipsRow
+import com.example.shisuan.ui.components.formatNumber
 import com.example.shisuan.ui.icons.Add
 import com.example.shisuan.ui.icons.ArrowBack
 import com.example.shisuan.ui.icons.Calendar
@@ -77,6 +82,7 @@ fun NewBatchScreen(
     val ocrScanning by viewModel.ocrScanning.collectAsState()
     val batchNamePreview by viewModel.batchNamePreview.collectAsState()
     val errorMessage by viewModel.error.collectAsState()
+    val saving by viewModel.saving.collectAsState()
 
     // 表单状态来自 ViewModel，配置变更后仍可恢复
     val sampleWeight by viewModel.sampleWeight.collectAsState()
@@ -143,7 +149,11 @@ fun NewBatchScreen(
         val dir = androidx.core.content.ContextCompat.getExternalFilesDirs(context, null)
             .firstOrNull()
         if (dir != null) {
-            val file = File(dir, "ocr_${System.currentTimeMillis()}.jpg")
+            // 固定文件名复用：每次拍照覆盖同一文件，不再累积占用存储；
+            // 顺带清理旧版本「时间戳文件名」策略遗留的图片
+            dir.listFiles { f -> f.name.startsWith("ocr_") && f.name != "ocr_capture.jpg" }
+                ?.forEach { it.delete() }
+            val file = File(dir, "ocr_capture.jpg")
             val uri = androidx.core.content.FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -222,13 +232,20 @@ fun NewBatchScreen(
                             color = Foggy
                         )
                     }
-                    OutlinedTextField(
+                    // 样品重量：加减步进 + 常用重量一键填入，键盘输入保留为精确通道
+                    StepperNumberField(
                         value = sampleWeight,
                         onValueChange = { viewModel.onSampleWeightChange(it) },
-                        label = { Text("样品重量 (g) *") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth()
+                        label = "样品重量 (g) *",
+                        step = 10.0,
+                        placeholder = "如 1000"
+                    )
+                    QuickChipsRow(
+                        options = listOf(100.0, 250.0, 500.0, 1000.0, 2000.0),
+                        currentText = sampleWeight,
+                        onPick = { viewModel.onSampleWeightChange(formatNumber(it, 0)) },
+                        places = 0,
+                        suffix = "g"
                     )
                     OutlinedTextField(
                         value = note,
@@ -238,15 +255,24 @@ fun NewBatchScreen(
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2
                     )
-                    // 出品率：熬煮蒸发使成品少于投料，不折算会低估吨价
-                    OutlinedTextField(
+                    // 出品率：滑条 50~100% 粗调 + 快捷标签，熬煮蒸发使成品少于投料，
+                    // 不折算会低估吨价
+                    SliderNumberField(
                         value = yieldRate,
                         onValueChange = { viewModel.onYieldRateChange(it) },
-                        label = { Text("出品率 %（可选）") },
-                        placeholder = { Text("如 85：投料 1000g 出成品 850g") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth()
+                        label = "出品率 %（可选，拖动滑条或输入）",
+                        placeholder = "如 85：投料 1000g 出成品 850g",
+                        range = 50f..100f,
+                        increment = 1f,
+                        places = 1,
+                        suffix = "%"
+                    )
+                    QuickChipsRow(
+                        options = listOf(80.0, 85.0, 90.0, 95.0),
+                        currentText = yieldRate,
+                        onPick = { viewModel.onYieldRateChange(formatNumber(it, 0)) },
+                        places = 0,
+                        suffix = "%"
                     )
                     val weightForPreview = sampleWeight.toDoubleOrNull() ?: 0.0
                     val yieldPreview = yieldRate.toDoubleOrNull() ?: 0.0
@@ -287,31 +313,28 @@ fun NewBatchScreen(
                     }
                     if (showProcessingCost) {
                         Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
+                        StepperNumberField(
                             value = packagingCost,
                             onValueChange = { viewModel.onPackagingCostChange(it) },
-                            label = { Text("包材：瓶/盖/标签/外箱 (元)") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                            label = "包材：瓶/盖/标签/外箱",
+                            step = 1.0,
+                            suffix = "元"
                         )
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
+                        StepperNumberField(
                             value = laborCost,
                             onValueChange = { viewModel.onLaborCostChange(it) },
-                            label = { Text("人工 (元)") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                            label = "人工",
+                            step = 1.0,
+                            suffix = "元"
                         )
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
+                        StepperNumberField(
                             value = overheadCost,
                             onValueChange = { viewModel.onOverheadCostChange(it) },
-                            label = { Text("水电蒸汽 / 折旧 / 其他 (元)") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                            label = "水电蒸汽 / 折旧 / 其他",
+                            step = 1.0,
+                            suffix = "元"
                         )
                     }
                 }
@@ -423,17 +446,20 @@ fun NewBatchScreen(
             Button(
                 onClick = {
                     val date = batchDateStr ?: return@Button
+                    // 保存由 ViewModel 在 viewModelScope 中完成，成功才导航返回；
+                    // 失败时留在本页，Snackbar 提示原因（修复静默丢单）
                     if (isEdit) {
-                        viewModel.updateBatch(batchDate = date)
+                        viewModel.updateBatch(batchDate = date) { ok -> if (ok) onNavigateBack() }
                     } else {
-                        viewModel.saveBatch(productId = productId, batchDate = date)
+                        viewModel.saveBatch(productId = productId, batchDate = date) { ok ->
+                            if (ok) onNavigateBack()
+                        }
                     }
-                    onNavigateBack()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
-                enabled = canSubmit,
+                enabled = canSubmit && !saving,
                 shape = ButtonShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Rausch,
@@ -441,7 +467,7 @@ fun NewBatchScreen(
                 )
             ) {
                 Text(
-                    if (isEdit) "保存修改" else "保存批次",
+                    if (saving) "保存中…" else if (isEdit) "保存修改" else "保存批次",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp
                 )
@@ -600,6 +626,7 @@ fun IngredientPickerSheet(
     var weight by remember { mutableStateOf("") }
     var usePercent by remember { mutableStateOf(false) }
     var showQuickAdd by remember { mutableStateOf(false) }
+    var search by remember { mutableStateOf("") }
     var newName by remember { mutableStateOf("") }
     var newBrand by remember { mutableStateOf("") }
     var newCategory by remember { mutableStateOf("") }
@@ -658,13 +685,17 @@ fun IngredientPickerSheet(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
+                TextChipsRow(
+                    options = listOf("水果", "糖类", "添加剂", "乳制品", "包材", "其他"),
+                    current = newCategory,
+                    onPick = { newCategory = it }
+                )
+                StepperNumberField(
                     value = newPrice,
                     onValueChange = { newPrice = it },
-                    label = { Text("参考单价 (元/kg)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
+                    label = "参考单价",
+                    step = 0.5,
+                    suffix = "元/kg"
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -691,49 +722,69 @@ fun IngredientPickerSheet(
                     ) { Text("入库") }
                 }
             } else {
-                // 原料列表
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 200.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    itemsIndexed(ingredients) { _, ingredient ->
-                        val isSelected = selected?.id == ingredient.id
-                        Card(
-                            onClick = { selected = ingredient },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = ButtonShape,
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected)
-                                    RauschDisabled else MaterialTheme.colorScheme.surface
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                // 搜索过滤：原料多时免滚动查找；名称或品牌匹配，忽略大小写
+                val filtered = if (search.isBlank()) ingredients else ingredients.filter {
+                    it.name.contains(search, ignoreCase = true) ||
+                        it.supplier.contains(search, ignoreCase = true)
+                }
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    label = { Text("搜索原料名称 / 品牌") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (filtered.isEmpty()) {
+                    Text(
+                        "没有匹配「${search.trim()}」的原料，可点下方「新原料入库」",
+                        fontSize = 12.sp,
+                        color = WarningOrange
+                    )
+                } else {
+                    // 原料列表
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 200.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        itemsIndexed(filtered) { _, ingredient ->
+                            val isSelected = selected?.id == ingredient.id
+                            Card(
+                                onClick = { selected = ingredient },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = ButtonShape,
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected)
+                                        RauschDisabled else MaterialTheme.colorScheme.surface
+                                )
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(ingredient.name, fontWeight = FontWeight.Medium)
-                                    Row {
-                                        if (ingredient.supplier.isNotEmpty()) {
-                                            Text(
-                                                "${ingredient.supplier} ·",
-                                                fontSize = 11.sp,
-                                                color = Foggy
-                                            )
-                                        }
-                                        if (ingredient.category.isNotEmpty()) {
-                                            Text(
-                                                ingredient.category,
-                                                fontSize = 11.sp,
-                                                color = Foggy
-                                            )
-                                        }
-                                        if (ingredient.unitPrice > 0) {
-                                            Text(
-                                                " · ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}",
-                                                fontSize = 11.sp,
-                                                color = Foggy
-                                            )
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(ingredient.name, fontWeight = FontWeight.Medium)
+                                        Row {
+                                            if (ingredient.supplier.isNotEmpty()) {
+                                                Text(
+                                                    "${ingredient.supplier} ·",
+                                                    fontSize = 11.sp,
+                                                    color = Foggy
+                                                )
+                                            }
+                                            if (ingredient.category.isNotEmpty()) {
+                                                Text(
+                                                    ingredient.category,
+                                                    fontSize = 11.sp,
+                                                    color = Foggy
+                                                )
+                                            }
+                                            if (ingredient.unitPrice > 0) {
+                                                Text(
+                                                    " · ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}",
+                                                    fontSize = 11.sp,
+                                                    color = Foggy
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -767,14 +818,19 @@ fun IngredientPickerSheet(
                         )
                     }
                     if (usePercent) {
-                        OutlinedTextField(
+                        StepperNumberField(
                             value = weight,
                             onValueChange = { weight = it },
-                            label = { Text("占样品比例 (%)") },
-                            placeholder = { Text("如 0.05（万分之五）") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                            label = "占样品比例 (%)",
+                            step = 0.01,
+                            placeholder = "如 0.05（万分之五）"
+                        )
+                        QuickChipsRow(
+                            options = listOf(0.01, 0.05, 0.1, 0.5, 1.0),
+                            currentText = weight,
+                            onPick = { weight = formatNumber(it, 2) },
+                            places = 2,
+                            suffix = "%"
                         )
                         val pct = weight.toDoubleOrNull() ?: 0.0
                         if (sampleWeightGram > 0 && pct > 0) {
@@ -791,13 +847,18 @@ fun IngredientPickerSheet(
                             )
                         }
                     } else {
-                        OutlinedTextField(
+                        StepperNumberField(
                             value = weight,
                             onValueChange = { weight = it },
-                            label = { Text("用量 (g)") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
+                            label = "用量 (g)",
+                            step = 1.0
+                        )
+                        QuickChipsRow(
+                            options = listOf(1.0, 5.0, 10.0, 20.0, 50.0, 100.0),
+                            currentText = weight,
+                            onPick = { weight = formatNumber(it, 0) },
+                            places = 0,
+                            suffix = "g"
                         )
                     }
                     // 单价只读：取原料库库存价，避免重复填写

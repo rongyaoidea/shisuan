@@ -30,6 +30,11 @@ import com.example.shisuan.ui.icons.Package
 import com.example.shisuan.ui.icons.categoryIcon
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.components.EmptyState
+import com.example.shisuan.ui.components.QuickChipsRow
+import com.example.shisuan.ui.components.SliderNumberField
+import com.example.shisuan.ui.components.StepperNumberField
+import com.example.shisuan.ui.components.TextChipsRow
+import com.example.shisuan.ui.components.formatNumber
 import com.example.shisuan.ui.viewModel.BackupViewModel
 import com.example.shisuan.ui.viewModel.ProductViewModel
 import com.example.shisuan.utils.WeightFormatter
@@ -300,41 +305,66 @@ fun NewProductDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                TextChipsRow(
+                    options = listOf("果酱", "酱料", "调味品", "罐头", "烘焙", "其他"),
+                    current = category,
+                    onPick = { category = it }
+                )
                 Text("包装规格", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = Foggy)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
+                    StepperNumberField(
                         value = pkgBox,
                         onValueChange = { pkgBox = it },
-                        label = { Text("每箱包数") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        label = "每箱包数",
+                        step = 1.0,
+                        min = 1.0,
                         modifier = Modifier.weight(1f)
                     )
-                    OutlinedTextField(
+                    StepperNumberField(
                         value = pkgGram,
                         onValueChange = { pkgGram = it },
-                        label = { Text("每包克数 (g)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        label = "每包克数 (g)",
+                        step = 10.0,
+                        min = 1.0,
                         modifier = Modifier.weight(1f)
                     )
                 }
+                QuickChipsRow(
+                    options = listOf(100.0, 200.0, 250.0, 500.0, 1000.0),
+                    currentText = pkgGram,
+                    onPick = { pkgGram = formatNumber(it, 0) },
+                    places = 0,
+                    suffix = "g"
+                )
                 Text(
                     "每箱克数 = $pkgBoxNum × $pkgGramNum = ${WeightFormatter.format(boxGramComputed)}（自动计算）",
                     fontSize = 12.sp,
                     color = Foggy
                 )
-                OutlinedTextField(
+                SliderNumberField(
                     value = marginRate,
                     onValueChange = { marginRate = it },
-                    label = { Text("目标毛利率 %（可选）") },
-                    placeholder = { Text("如 30：批次卡将显示建议出厂价") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
+                    label = "目标毛利率 %（可选）",
+                    placeholder = "拖动滑条或输入，如 30",
+                    range = 0f..60f,
+                    increment = 1f,
+                    places = 0,
+                    suffix = "%"
+                )
+                QuickChipsRow(
+                    options = listOf(20.0, 30.0, 40.0, 50.0),
+                    currentText = marginRate,
+                    onPick = { marginRate = formatNumber(it, 0) },
+                    places = 0,
+                    suffix = "%"
+                )
+                Text(
+                    "设置后批次卡将显示建议出厂价",
+                    fontSize = 12.sp,
+                    color = Foggy
                 )
                 OutlinedTextField(
                     value = description,

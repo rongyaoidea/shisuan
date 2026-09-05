@@ -50,6 +50,9 @@ fun ProductDetailScreen(
     val errorMessage by viewModel.error.collectAsState()
     val historyBatchId by viewModel.historyBatchId.collectAsState()
     val snapshots by viewModel.snapshots.collectAsState()
+    val currentDigest by viewModel.historyCurrentDigest.collectAsState()
+    val outcomeBatchId by viewModel.outcomeBatchId.collectAsState()
+    val batchResult by viewModel.batchResult.collectAsState()
     var pendingDelete by remember { mutableStateOf<BatchWithCostUI?>(null) }
     var pendingRestore by remember { mutableStateOf<BatchSnapshot?>(null) }
 
@@ -120,14 +123,16 @@ fun ProductDetailScreen(
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                "成本趋势（元/吨，由新到旧）",
+                                "成本趋势（元/吨，由旧到新）",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Ink
                             )
                             Spacer(Modifier.height(8.dp))
                             CostTrendChart(
-                                data = batchesWithCost.map { it.batch.batchName to it.result.unitCostPerTon }
+                                // 折线按时间从旧到新绘制，符合时间序列阅读习惯
+                                data = batchesWithCost.reversed()
+                                    .map { it.batch.batchName to it.result.unitCostPerTon }
                             )
                         }
                     }
@@ -146,7 +151,8 @@ fun ProductDetailScreen(
                         onEdit = { onNavigateToEditBatch(item.batch.productId, item.batch.id) },
                         onDelete = { pendingDelete = item },
                         onCopy = { onNavigateToCopyBatch(item.batch.productId, item.batch.id) },
-                        onShowHistory = { viewModel.showHistory(item.batch.id) }
+                        onShowHistory = { viewModel.showHistory(item.batch.id) },
+                        onShowOutcome = { viewModel.showOutcome(item.batch.id) }
                     )
                 }
             }
@@ -177,8 +183,19 @@ fun ProductDetailScreen(
     if (historyBatchId != null) {
         SnapshotHistorySheet(
             snapshots = snapshots,
+            currentDigest = currentDigest,
             onDismiss = { viewModel.dismissHistory() },
             onRestoreClick = { pendingRestore = it }
+        )
+    }
+
+    // 批次成果记录面板
+    outcomeBatchId?.let { batchId ->
+        BatchOutcomeSheet(
+            batchId = batchId,
+            existing = batchResult,
+            onDismiss = { viewModel.dismissOutcome() },
+            onSave = { viewModel.saveOutcome(it) }
         )
     }
 
@@ -254,7 +271,8 @@ fun BatchCard(
     onEdit: () -> Unit = {},
     onDelete: () -> Unit = {},
     onCopy: () -> Unit = {},
-    onShowHistory: () -> Unit = {}
+    onShowHistory: () -> Unit = {},
+    onShowOutcome: () -> Unit = {}
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -341,8 +359,13 @@ fun BatchCard(
                     items = item.ingredients.map { it.ingredientName to it.totalCost }
                 )
                 Spacer(Modifier.height(4.dp))
-                TextButton(onClick = onShowHistory) {
-                    Text("版本历史", fontSize = 12.sp, color = Rausch)
+                Row {
+                    TextButton(onClick = onShowOutcome) {
+                        Text("成果记录", fontSize = 12.sp, color = Rausch)
+                    }
+                    TextButton(onClick = onShowHistory) {
+                        Text("版本历史", fontSize = 12.sp, color = Rausch)
+                    }
                 }
             }
             Spacer(Modifier.height(4.dp))
@@ -381,12 +404,14 @@ private fun CostCell(label: String, value: String) {
  * 版本历史时间线（git log 式）
  *
  * 每个节点 = 一次内容变更，#编号为内容指纹（唯一变更编号）。
- * 最新版本标「当前」，其余节点可发起恢复。
+ * 「当前」标在内容与批次现状一致的版本上（按 digest 匹配）——
+ * 恢复到旧版本后，旧版本成为「当前」，更新的版本仍可再恢复回去。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SnapshotHistorySheet(
     snapshots: List<BatchSnapshot>,
+    currentDigest: String?,
     onDismiss: () -> Unit,
     onRestoreClick: (BatchSnapshot) -> Unit
 ) {
@@ -414,7 +439,9 @@ fun SnapshotHistorySheet(
                     contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
                     itemsIndexed(snapshots) { index, snap ->
-                        val isLatest = index == 0
+                        // 「当前」= 内容指纹与批次现状一致；digest 尚未就绪时退回「最新一条」
+                        val isCurrent = if (currentDigest == null) index == 0
+                        else snap.digest == currentDigest
                         val ingredientCount = snap.snapshotData.lines().count { it.startsWith("ING") }
                         val time = java.time.Instant.ofEpochMilli(snap.createdAt)
                             .atZone(java.time.ZoneId.systemDefault())
@@ -428,7 +455,7 @@ fun SnapshotHistorySheet(
                                 Box(
                                     modifier = Modifier
                                         .size(10.dp)
-                                        .background(if (isLatest) Rausch else Foggy, CircleShape)
+                                        .background(if (isCurrent) Rausch else Foggy, CircleShape)
                                 )
                                 if (index < snapshots.size - 1) {
                                     Box(
@@ -446,9 +473,9 @@ fun SnapshotHistorySheet(
                                         "#${snap.digest}",
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 14.sp,
-                                        color = if (isLatest) Rausch else Ink
+                                        color = if (isCurrent) Rausch else Ink
                                     )
-                                    if (isLatest) {
+                                    if (isCurrent) {
                                         Spacer(Modifier.width(8.dp))
                                         Text(
                                             "当前",

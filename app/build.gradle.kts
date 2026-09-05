@@ -14,9 +14,25 @@ android {
         applicationId = "com.example.shisuan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.6.0"
+        versionCode = 8
+        versionName = "1.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 发布签名：由环境变量驱动，未配置时保持未签名（不影响日常构建）
+    //   SHISUAN_KEYSTORE=keystore 路径，SHISUAN_KEYSTORE_PASSWORD=keystore 口令
+    //   SHISUAN_KEY_ALIAS 别名（默认 shisuan）、SHISUAN_KEY_PASSWORD 密钥口令（默认同 keystore）
+    val ksPath = System.getenv("SHISUAN_KEYSTORE")
+    signingConfigs {
+        if (ksPath != null) {
+            create("release") {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("SHISUAN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SHISUAN_KEY_ALIAS") ?: "shisuan"
+                keyPassword = System.getenv("SHISUAN_KEY_PASSWORD")
+                    ?: System.getenv("SHISUAN_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -29,6 +45,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (ksPath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
