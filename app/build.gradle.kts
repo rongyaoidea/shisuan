@@ -60,6 +60,27 @@ android {
         arg("room.schemaLocation", "$projectDir/schemas")
     }
 
+    // schema JSON 作为 assets 打进 androidTest 与 debug variant：
+    //   - androidTest：真机 connectedAndroidTest 时 MigrationTestHelper 读取
+    //   - debug：Robolectric 迁移测试（testDebugUnitTest）继承 debug variant 的 assets
+    //   - release 不包含，生产 APK 不携带测试数据
+    sourceSets {
+        getByName("androidTest").assets.srcDirs("$projectDir/schemas")
+        getByName("debug").assets.srcDirs("$projectDir/schemas")
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric 需要访问打包资源
+            isIncludeAndroidResources = true
+            all {
+                // android-all 运行时 jar 改走阿里云镜像（默认 maven central 在部分网络不可达）
+                it.systemProperty("robolectric.dependency.repo.url", "https://maven.aliyun.com/repository/public")
+                it.systemProperty("robolectric.dependency.repo.id", "aliyun")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -95,6 +116,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
     testImplementation("app.cash.turbine:turbine:1.0.0")
+    // Robolectric：JVM 上模拟 Android 运行时，迁移测试无需真机即可执行
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.room:room-testing:2.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.room:room-testing:2.6.1")
 
