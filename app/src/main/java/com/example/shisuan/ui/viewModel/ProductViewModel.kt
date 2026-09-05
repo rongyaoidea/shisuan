@@ -437,7 +437,7 @@ class NewBatchViewModel @Inject constructor(
         onResult: (Boolean) -> Unit = {}
     ) {
         if (_saving.value) return
-        val weight = parsedSampleWeight ?: return
+        val weight = parsedSampleWeight ?: run { onResult(false); return }
         val ingredientsSnapshot = _ingredients.value
         val draft = buildBatchDraft(productId, weight)
         _saving.value = true
@@ -536,6 +536,7 @@ class NewBatchViewModel @Inject constructor(
         launchSafe {
             val batch = repo.getBatchById(batchId).first()
             if (batch == null) {
+                loadedEditBatchId = batchId
                 showError("要编辑的批次不存在或已被删除")
                 return@launchSafe
             }
@@ -600,7 +601,7 @@ class NewBatchViewModel @Inject constructor(
     fun updateBatch(batchDate: String, onResult: (Boolean) -> Unit = {}) {
         if (_saving.value) return
         val existing = _editBatchInfo.value ?: run { onResult(false); return }
-        val weight = parsedSampleWeight ?: return
+        val weight = parsedSampleWeight ?: run { onResult(false); return }
         val ingredientsSnapshot = _ingredients.value
         _saving.value = true
         viewModelScope.launch {

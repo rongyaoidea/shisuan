@@ -138,7 +138,7 @@ fun SliderNumberField(
         )
         val current = value.toDoubleOrNull()?.toFloat()
             ?.coerceIn(range.start, range.endInclusive) ?: range.start
-        val steps = (((range.endInclusive - range.start) / increment).roundToInt() - 1)
+        val steps = (((range.endInclusive - range.start) / increment.coerceAtLeast(0.0001f)).roundToInt() - 1)
             .coerceAtLeast(0)
         Slider(
             value = current,
