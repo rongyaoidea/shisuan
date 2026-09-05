@@ -321,6 +321,7 @@ fun NewProductDialog(
                         label = "每箱包数",
                         step = 1.0,
                         min = 1.0,
+                        inline = true,
                         modifier = Modifier.weight(1f)
                     )
                     StepperNumberField(
@@ -329,6 +330,7 @@ fun NewProductDialog(
                         label = "每包克数 (g)",
                         step = 10.0,
                         min = 1.0,
+                        inline = true,
                         modifier = Modifier.weight(1f)
                     )
                 }

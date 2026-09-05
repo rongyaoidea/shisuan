@@ -1,12 +1,16 @@
 package com.example.shisuan.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedIconButton
@@ -16,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -56,6 +61,9 @@ private fun decimalsFor(step: Double): Int =
  * 点击按钮以 [step] 增减，结果钳制在 [min] ~ [max]；
  * 键盘输入通道完整保留（步进只改文本，不接管状态）。
  * 空文本视为 0 起步。
+ *
+ * @param inline 按钮内嵌到输入框尾部（trailing 插槽）。用于对话框、并排字段等
+ *   窄容器：外部 44dp×2 按钮会吃掉近百 dp 宽度，把数字挤到不可见。
  */
 @Composable
 fun StepperNumberField(
@@ -68,12 +76,9 @@ fun StepperNumberField(
     max: Double = Double.MAX_VALUE,
     placeholder: String? = null,
     suffix: String? = null,
+    inline: Boolean = false,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
+    if (inline) {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
@@ -82,13 +87,36 @@ fun StepperNumberField(
             suffix = suffix?.let { { Text(it, color = Foggy, fontSize = 13.sp) } },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.weight(1f)
+            trailingIcon = {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    InlineStepButton("−") { adjustValue(value, -step, min, max, onValueChange) }
+                    InlineStepButton("＋") { adjustValue(value, step, min, max, onValueChange) }
+                }
+            },
+            modifier = modifier.fillMaxWidth()
         )
-        StepButton("−") {
-            adjustValue(value, -step, min, max, onValueChange)
-        }
-        StepButton("＋") {
-            adjustValue(value, step, min, max, onValueChange)
+    } else {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text(label) },
+                placeholder = placeholder?.let { { Text(it) } },
+                suffix = suffix?.let { { Text(it, color = Foggy, fontSize = 13.sp) } },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.weight(1f)
+            )
+            StepButton("−") {
+                adjustValue(value, -step, min, max, onValueChange)
+            }
+            StepButton("＋") {
+                adjustValue(value, step, min, max, onValueChange)
+            }
         }
     }
 }
@@ -208,5 +236,20 @@ fun TextChipsRow(
 private fun StepButton(symbol: String, onClick: () -> Unit) {
     OutlinedIconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
         Text(symbol, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Ink)
+    }
+}
+
+/** 内嵌到输入框 trailing 插槽的紧凑步进按钮（30dp 圆形），供 inline 模式使用 */
+@Composable
+private fun InlineStepButton(symbol: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(Foggy.copy(alpha = 0.15f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(symbol, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Ink)
     }
 }
