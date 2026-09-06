@@ -51,12 +51,14 @@ private val DonutPalette = listOf(
 /**
  * 批次吨价趋势折线图。
  *
- * @param data 按时间顺序的 (批次名, 吨价)；少于 2 个点不绘制
+ * @param data 按时间顺序的 (批次名, 数值)；少于 2 个点不绘制
+ * @param valueLabelFormat 数值轴标签格式，默认元整数额（出品率趋势传入百分比格式复用）
  */
 @Composable
 fun CostTrendChart(
     data: List<Pair<String, Double>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    valueLabelFormat: (Double) -> String = { "¥%,.0f".format(it) }
 ) {
     if (data.size < 2) return
     val maxValue = data.maxOf { it.second }
@@ -71,12 +73,12 @@ fun CostTrendChart(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "最低 ¥%,.0f".format(minValue),
+                "最低 ${valueLabelFormat(minValue)}",
                 fontSize = 11.sp,
                 color = Color(0xFF3B6D11)
             )
             Text(
-                "最高 ¥%,.0f".format(maxValue),
+                "最高 ${valueLabelFormat(maxValue)}",
                 fontSize = 11.sp,
                 color = Color(0xFF854F0B)
             )

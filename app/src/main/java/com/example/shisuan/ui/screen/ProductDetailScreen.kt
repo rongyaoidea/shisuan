@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.shisuan.data.database.BatchSnapshot
 import com.example.shisuan.data.database.Product
 import com.example.shisuan.ui.animation.entranceAnimation
+import com.example.shisuan.ui.animation.pressScale
 import com.example.shisuan.ui.components.CostTrendChart
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.components.IngredientCostDonut
@@ -30,6 +31,7 @@ import com.example.shisuan.ui.icons.Jar
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.BatchWithCostUI
 import com.example.shisuan.ui.viewModel.ProductDetailViewModel
+import com.example.shisuan.ui.viewModel.YieldAnalysis
 import com.example.shisuan.utils.WeightFormatter
 
 /**
@@ -47,6 +49,8 @@ fun ProductDetailScreen(
 ) {
     val product by viewModel.product.collectAsState()
     val batchesWithCost by viewModel.batchesWithCost.collectAsState()
+    val yieldAnalysis by viewModel.yieldAnalysis.collectAsState()
+    val yieldTrend by viewModel.yieldTrend.collectAsState()
     val errorMessage by viewModel.error.collectAsState()
     val historyBatchId by viewModel.historyBatchId.collectAsState()
     val snapshots by viewModel.snapshots.collectAsState()
@@ -136,6 +140,23 @@ fun ProductDetailScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // 损耗分析卡（有批次记录出品率时展示）
+            yieldAnalysis?.let { analysis ->
+                item(key = "yield") {
+                    YieldAnalysisCard(analysis = analysis, trend = yieldTrend)
+                }
+            }
+
+            // 配方模板快捷入口：以最近批次为模板新建（列表按 createdAt DESC，首项即最新）
+            batchesWithCost.firstOrNull()?.let { latest ->
+                item(key = "template") {
+                    TemplateShortcutCard(
+                        latestBatchName = latest.batch.batchName,
+                        onClick = { onNavigateToCopyBatch(productId, latest.batch.id) }
+                    )
                 }
             }
 
@@ -258,6 +279,107 @@ private fun SpecCell(label: String, value: String) {
         Text(label, fontSize = 11.sp, color = Foggy)
         Spacer(Modifier.height(2.dp))
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+    }
+}
+
+/**
+ * 损耗分析卡 - 产品维度的出品率摘要
+ *
+ * 平均/最近出品率 + 损耗对吨价的抬升幅度 + 恢复到最佳的潜在节省，
+ * 出品率记录 >= 2 时附带趋势折线（复用成本趋势图，值格式改为百分比）。
+ */
+@Composable
+fun YieldAnalysisCard(analysis: YieldAnalysis, trend: List<Pair<String, Double>>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = CardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "损耗分析 · 出品率",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Ink
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                SpecCell("平均出品率", "%.1f%%".format(analysis.avgYieldPercent))
+                SpecCell("最近批次", "%.1f%%".format(analysis.latestYieldPercent))
+                SpecCell("已记录批次", "${analysis.recordedCount}")
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "熬煮蒸发使实际产量低于投料，吨价已按成品重量折算，较不折算上升约 %.1f%%"
+                    .format(analysis.lossImpactPercent),
+                fontSize = 12.sp,
+                color = Foggy
+            )
+            if (trend.size >= 2) {
+                Spacer(Modifier.height(8.dp))
+                CostTrendChart(
+                    data = trend,
+                    valueLabelFormat = { "%.1f%%".format(it) }
+                )
+            }
+            analysis.potentialSavingPerTon?.let { saving ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "若恢复到最佳出品率 %.1f%%（%s），吨价可降约 ¥%,.0f"
+                        .format(analysis.bestYieldPercent ?: 0.0, analysis.bestBatchName ?: "", saving),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SuccessGreen
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 配方模板快捷入口 - 以最近批次为模板新建
+ *
+ * 复制入口原先只埋在批次卡操作行里，不易被发现；试产迭代场景
+ * （80% 配料不变只调一两处）需要一步直达的显式入口。
+ */
+@Composable
+fun TemplateShortcutCard(latestBatchName: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .pressScale(onClick = onClick),
+        shape = CardShape,
+        colors = CardDefaults.cardColors(containerColor = SoftBg)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Add, null, tint = Rausch, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "以上一批次为模板新建",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Ink
+                )
+                Text(
+                    "「$latestBatchName」的配料、加工费与出品率将自动带入，只改差异项",
+                    fontSize = 11.sp,
+                    color = Foggy
+                )
+            }
+        }
     }
 }
 

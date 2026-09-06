@@ -220,6 +220,48 @@ class ProductDetailViewModel @Inject constructor(
         }
     }
 
+    // ─────────── 损耗分析（出品率维度） ───────────
+
+    /**
+     * 损耗分析：由 [batchesWithCost] 派生，无需额外查库。
+     *
+     * 总成本不随出品率变化，而吨价 ∝ 1/出品率（effectiveWeight = 投料 × 出品率），
+     * 因此「损耗影响」与「恢复到最佳的节省」都是纯比例换算，不必重算成本。
+     */
+    val yieldAnalysis: StateFlow<YieldAnalysis?> = batchesWithCost.map { rows ->
+        val recorded = rows.filter { (it.batch.yieldRatePercent ?: 0.0) > 0.0 }
+        if (recorded.isEmpty()) return@map null
+
+        // rows 按 createdAt DESC 排序，first 即最近批次
+        val latest = recorded.first()
+        val latestYield = latest.batch.yieldRatePercent!!
+        val avg = recorded.sumOf { it.batch.yieldRatePercent!! } / recorded.size
+        val best = recorded.maxBy { it.batch.yieldRatePercent!! }
+
+        val savingPerTon = if (best.batch.id != latest.batch.id) {
+            latest.result.unitCostPerTon *
+                (1.0 - latestYield / best.batch.yieldRatePercent!!)
+        } else null
+
+        YieldAnalysis(
+            avgYieldPercent = avg,
+            recordedCount = recorded.size,
+            latestBatchName = latest.batch.batchName,
+            latestYieldPercent = latestYield,
+            lossImpactPercent = 100.0 / latestYield - 1.0,
+            bestBatchName = best.batch.batchName,
+            bestYieldPercent = best.batch.yieldRatePercent,
+            potentialSavingPerTon = savingPerTon?.let { CostCalculator.round2(it) }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** 出品率趋势（按时间从旧到新），不足 2 个记录时为空表 —— 供折线图复用 */
+    val yieldTrend: StateFlow<List<Pair<String, Double>>> = batchesWithCost.map { rows ->
+        rows.filter { (it.batch.yieldRatePercent ?: 0.0) > 0.0 }
+            .reversed()
+            .map { it.batch.batchName to it.batch.yieldRatePercent!! }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     companion object {
         /** 与 Product 实体默认值保持一致 */
         private const val DEFAULT_WEIGHT_PER_BOX_GRAM = 5000.0
@@ -244,7 +286,9 @@ class NewBatchViewModel @Inject constructor(
     val ingredients: StateFlow<List<BatchIngredient>> = _ingredients.asStateFlow()
 
     val allIngredients: StateFlow<List<Ingredient>> =
-        repo.allIngredients.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        repo.allIngredientsWithUseCount.map { rows ->
+            rows.map { it.ingredient }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val totalMaterialCost: StateFlow<Double> = _ingredients.map { list ->
         list.sumOf { it.totalCost }
@@ -675,4 +719,26 @@ data class BatchWithCostUI(
     val result: CostResult,
     val differential: CostCalculator.CostDifferential?,
     val suggestedTonPrice: Double? = null
+)
+
+/**
+ * UI 数据类 - 产品维度损耗分析摘要
+ *
+ * @param avgYieldPercent 有出品率记录批次的均值
+ * @param recordedCount 记录了出品率的批次数
+ * @param latestBatchName / latestYieldPercent 最近一次记录的批次名与出品率
+ * @param lossImpactPercent 熬煮损耗使吨价上升的百分比 = 100/出品率 - 1
+ * @param bestBatchName / bestYieldPercent 历史最佳出品率及其批次
+ * @param potentialSavingPerTon 最近批次若恢复到最佳出品率，吨价可降金额（元/吨）；
+ *   最近批次已是最佳时为 null
+ */
+data class YieldAnalysis(
+    val avgYieldPercent: Double,
+    val recordedCount: Int,
+    val latestBatchName: String,
+    val latestYieldPercent: Double,
+    val lossImpactPercent: Double,
+    val bestBatchName: String? = null,
+    val bestYieldPercent: Double? = null,
+    val potentialSavingPerTon: Double? = null
 )

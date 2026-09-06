@@ -82,7 +82,8 @@ fun IngredientLibraryScreen(
                 contentPadding = PaddingValues(bottom = 80.dp, top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(ingredients, key = { it.id }) { ingredient ->
+                items(ingredients, key = { it.ingredient.id }) { row ->
+                    val ingredient = row.ingredient
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -123,6 +124,15 @@ fun IngredientLibraryScreen(
                                     },
                                     fontSize = 12.sp,
                                     color = Foggy
+                                )
+                            }
+                            // 使用频次：列表按频次降序，徽章解释排序依据
+                            if (row.useCount > 0) {
+                                Text(
+                                    "用于 ${row.useCount} 个批次",
+                                    fontSize = 11.sp,
+                                    color = Foggy,
+                                    modifier = Modifier.padding(end = 4.dp)
                                 )
                             }
                             IconButton(onClick = { editing = ingredient }) {

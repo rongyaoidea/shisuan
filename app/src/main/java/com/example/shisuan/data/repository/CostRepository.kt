@@ -174,8 +174,13 @@ class CostRepository(private val db: CostCalDatabase) {
 
     // ============ Ingredient 原料库 ============
 
-    val allIngredients: Flow<List<Ingredient>> = db.ingredientDao().getAllActive()
-    
+    /**
+     * 全部活跃原料（含使用频次，按频次降序）。
+     * 配料库列表展示「用于 N 个批次」，批次录入的原料选择器借此把常用原料前置。
+     */
+    val allIngredientsWithUseCount: Flow<List<IngredientWithUseCount>> =
+        db.ingredientDao().getAllActiveWithUseCount()
+
     suspend fun getIngredientById(id: Long): Ingredient? = 
         db.ingredientDao().getById(id)
     

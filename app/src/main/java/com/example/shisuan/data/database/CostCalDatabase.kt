@@ -145,10 +145,37 @@ interface BatchIngredientDao {
     suspend fun deleteByBatch(batchId: Long)
 }
 
+/**
+ * 原料 + 使用频次（Room 关联查询，一次性取回）
+ *
+ * 按 (名称, 品牌) 匹配而非 ingredientId：批次明细的 ingredientId 为可空关联，
+ * 而名称与品牌是录入时必带的冗余字段，统计口径更完整。
+ */
+data class IngredientWithUseCount(
+    @Embedded val ingredient: Ingredient,
+    /** 使用过该原料的批次数（同批次多次使用只计一次） */
+    val useCount: Int
+)
+
 @Dao
 interface IngredientDao {
     @Query("SELECT * FROM ingredient WHERE isActive = 1 ORDER BY name")
     fun getAllActive(): Flow<List<Ingredient>>
+
+    /**
+     * 全部活跃原料，按使用频次降序（常用前置），频次同值按名称升序。
+     * 配料库列表与批次录入的原料选择器共用，让高频原料唾手可得。
+     */
+    @Query("""
+        SELECT i.*, (
+            SELECT COUNT(DISTINCT bi.batchId) FROM batch_ingredient bi
+            WHERE bi.ingredientName = i.name AND bi.ingredientSupplier = i.supplier
+        ) AS useCount
+        FROM ingredient i
+        WHERE i.isActive = 1
+        ORDER BY useCount DESC, i.name
+    """)
+    fun getAllActiveWithUseCount(): Flow<List<IngredientWithUseCount>>
 
     @Query("SELECT * FROM ingredient WHERE id = :id")
     suspend fun getById(id: Long): Ingredient?
