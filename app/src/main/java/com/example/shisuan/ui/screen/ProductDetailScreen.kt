@@ -16,6 +16,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.BatchSnapshot
 import com.example.shisuan.data.database.Product
 import com.example.shisuan.ui.animation.entranceAnimation
@@ -33,6 +34,9 @@ import com.example.shisuan.ui.viewModel.BatchWithCostUI
 import com.example.shisuan.ui.viewModel.ProductDetailViewModel
 import com.example.shisuan.ui.viewModel.YieldAnalysis
 import com.example.shisuan.utils.WeightFormatter
+import com.example.shisuan.utils.countSnapshotIngredients
+import com.example.shisuan.utils.formatSnapshotLabel
+import java.util.Locale
 
 /**
  * 产品详情页 - 成本趋势 + 批次列表（含加工费、建议售价、配料占比）
@@ -47,16 +51,16 @@ fun ProductDetailScreen(
     onNavigateToCopyBatch: (Long, Long) -> Unit,
     viewModel: ProductDetailViewModel = hiltViewModel()
 ) {
-    val product by viewModel.product.collectAsState()
-    val batchesWithCost by viewModel.batchesWithCost.collectAsState()
-    val yieldAnalysis by viewModel.yieldAnalysis.collectAsState()
-    val yieldTrend by viewModel.yieldTrend.collectAsState()
-    val errorMessage by viewModel.error.collectAsState()
-    val historyBatchId by viewModel.historyBatchId.collectAsState()
-    val snapshots by viewModel.snapshots.collectAsState()
-    val currentDigest by viewModel.historyCurrentDigest.collectAsState()
-    val outcomeBatchId by viewModel.outcomeBatchId.collectAsState()
-    val batchResult by viewModel.batchResult.collectAsState()
+    val product by viewModel.product.collectAsStateWithLifecycle()
+    val batchesWithCost by viewModel.batchesWithCost.collectAsStateWithLifecycle()
+    val yieldAnalysis by viewModel.yieldAnalysis.collectAsStateWithLifecycle()
+    val yieldTrend by viewModel.yieldTrend.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.error.collectAsStateWithLifecycle()
+    val historyBatchId by viewModel.historyBatchId.collectAsStateWithLifecycle()
+    val snapshots by viewModel.snapshots.collectAsStateWithLifecycle()
+    val currentDigest by viewModel.historyCurrentDigest.collectAsStateWithLifecycle()
+    val outcomeBatchId by viewModel.outcomeBatchId.collectAsStateWithLifecycle()
+    val batchResult by viewModel.batchResult.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<BatchWithCostUI?>(null) }
     var pendingRestore by remember { mutableStateOf<BatchSnapshot?>(null) }
 
@@ -70,6 +74,12 @@ fun ProductDetailScreen(
 
     LaunchedEffect(productId) {
         viewModel.setProduct(productId)
+    }
+
+    // 派生值缓存：reversed().map 每次重组都新建列表，remember 后仅当源数据变化才重算
+    val costTrendData = remember(batchesWithCost) {
+        batchesWithCost.reversed()
+            .map { it.batch.batchName to it.result.unitCostPerTon }
     }
 
     Scaffold(
@@ -135,8 +145,7 @@ fun ProductDetailScreen(
                             Spacer(Modifier.height(8.dp))
                             CostTrendChart(
                                 // 折线按时间从旧到新绘制，符合时间序列阅读习惯
-                                data = batchesWithCost.reversed()
-                                    .map { it.batch.batchName to it.result.unitCostPerTon }
+                                data = costTrendData
                             )
                         }
                     }
@@ -310,14 +319,14 @@ fun YieldAnalysisCard(analysis: YieldAnalysis, trend: List<Pair<String, Double>>
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                SpecCell("平均出品率", "%.1f%%".format(analysis.avgYieldPercent))
-                SpecCell("最近批次", "%.1f%%".format(analysis.latestYieldPercent))
+                SpecCell("平均出品率", "%.1f%%".format(Locale.CHINA, analysis.avgYieldPercent))
+                SpecCell("最近批次", "%.1f%%".format(Locale.CHINA, analysis.latestYieldPercent))
                 SpecCell("已记录批次", "${analysis.recordedCount}")
             }
             Spacer(Modifier.height(10.dp))
             Text(
                 "熬煮蒸发使实际产量低于投料，吨价已按成品重量折算，较不折算上升约 %.1f%%"
-                    .format(analysis.lossImpactPercent),
+                    .format(Locale.CHINA, analysis.lossImpactPercent),
                 fontSize = 12.sp,
                 color = Foggy
             )
@@ -325,14 +334,14 @@ fun YieldAnalysisCard(analysis: YieldAnalysis, trend: List<Pair<String, Double>>
                 Spacer(Modifier.height(8.dp))
                 CostTrendChart(
                     data = trend,
-                    valueLabelFormat = { "%.1f%%".format(it) }
+                    valueLabelFormat = { "%.1f%%".format(Locale.CHINA, it) }
                 )
             }
             analysis.potentialSavingPerTon?.let { saving ->
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "若恢复到最佳出品率 %.1f%%（%s），吨价可降约 ¥%,.0f"
-                        .format(analysis.bestYieldPercent ?: 0.0, analysis.bestBatchName ?: "", saving),
+                        .format(Locale.CHINA, analysis.bestYieldPercent ?: 0.0, analysis.bestBatchName ?: "", saving),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = SuccessGreen
@@ -402,14 +411,19 @@ fun BatchCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .entranceAnimation(index = index)
-            .clickable { expanded = !expanded },
+            .entranceAnimation(index = index),
         shape = CardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // 标题行可点击展开/收起；操作行 TextButton 独立，避免整卡 clickable 误触
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     item.batch.batchName,
                     style = MaterialTheme.typography.titleMedium,
@@ -425,8 +439,8 @@ fun BatchCard(
                         else -> Foggy
                     }
                     Text(
-                        if (diff.diffPercent > 0) "↑ ${"%.1f".format(diff.diffPercent)}%"
-                        else "↓ ${"%.1f".format(-diff.diffPercent)}%",
+                        if (diff.diffPercent > 0) "↑ ${"%.1f".format(Locale.CHINA, diff.diffPercent)}%"
+                        else "↓ ${"%.1f".format(Locale.CHINA, -diff.diffPercent)}%",
                         color = color,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -439,9 +453,9 @@ fun BatchCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                CostCell("吨价", "¥${"%,.0f".format(item.result.unitCostPerTon)}")
-                CostCell("箱价", "¥${"%.2f".format(item.result.costPerBox)}")
-                CostCell("包价", "¥${"%.2f".format(item.result.costPerPackage)}")
+                CostCell("吨价", "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}")
+                CostCell("箱价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerBox)}")
+                CostCell("包价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerPackage)}")
             }
             // 总成本构成与建议售价
             Spacer(Modifier.height(8.dp))
@@ -451,13 +465,13 @@ fun BatchCard(
             ) {
                 Text(
                     "原料 ¥%,.2f + 加工 ¥%,.2f = ¥%,.2f"
-                        .format(item.materialCost, item.processingCost, item.totalCost),
+                        .format(Locale.CHINA, item.materialCost, item.processingCost, item.totalCost),
                     fontSize = 12.sp,
                     color = Foggy
                 )
                 item.suggestedTonPrice?.let { price ->
                     Text(
-                        "建议出厂价 ¥%,.0f/吨".format(price),
+                        "建议出厂价 ¥%,.0f/吨".format(Locale.CHINA, price),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Rausch
@@ -471,7 +485,7 @@ fun BatchCard(
                 Spacer(Modifier.height(8.dp))
                 item.batch.yieldRatePercent?.let { yield ->
                     Text(
-                        "出品率 %.1f%%（成本已按成品重量折算）".format(yield),
+                        "出品率 %.1f%%（成本已按成品重量折算）".format(Locale.CHINA, yield),
                         fontSize = 12.sp,
                         color = Foggy
                     )
@@ -538,6 +552,15 @@ fun SnapshotHistorySheet(
     onRestoreClick: (BatchSnapshot) -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        // 派生值移出组合：配料计数 + 时间格式化在 remember 中预计算，
+        // 避免每次重组重复 lines().count 与 java.time 转换
+        // Triple(snap, ingredientCount, label)：不用局部 data class，保证编译兼容
+        val rows = remember(snapshots) {
+            snapshots.map { snap ->
+                val count = countSnapshotIngredients(snap.snapshotData)
+                Triple(snap, count, formatSnapshotLabel(snap.version, snap.createdAt, count))
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -560,16 +583,14 @@ fun SnapshotHistorySheet(
                     modifier = Modifier.heightIn(max = 420.dp),
                     contentPadding = PaddingValues(bottom = 24.dp)
                 ) {
-                    itemsIndexed(snapshots) { index, snap ->
+                    itemsIndexed(rows) { index, row ->
+                        val snap = row.first
+                        val label = row.third
                         // 「当前」= 内容指纹与批次现状一致；digest 尚未就绪时退回「最新一条」
                         val isCurrent = if (currentDigest == null) index == 0
                         else snap.digest == currentDigest
-                        val ingredientCount = snap.snapshotData.lines().count { it.startsWith("ING") }
-                        val time = java.time.Instant.ofEpochMilli(snap.createdAt)
-                            .atZone(java.time.ZoneId.systemDefault())
-                            .toLocalDateTime()
                         Row(modifier = Modifier.fillMaxWidth()) {
-                            // 时间轴：圆点 + 连接竖线
+                             // 时间轴：圆点 + 连接竖线
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier.width(24.dp)
@@ -579,7 +600,7 @@ fun SnapshotHistorySheet(
                                         .size(10.dp)
                                         .background(if (isCurrent) Rausch else Foggy, CircleShape)
                                 )
-                                if (index < snapshots.size - 1) {
+                                if (index < rows.size - 1) {
                                     Box(
                                         modifier = Modifier
                                             .width(2.dp)
@@ -615,12 +636,7 @@ fun SnapshotHistorySheet(
                                     }
                                 }
                                 Text(
-                                    "v%d · %02d-%02d %02d:%02d · %d 种配料"
-                                        .format(
-                                            snap.version,
-                                            time.monthValue, time.dayOfMonth, time.hour, time.minute,
-                                            ingredientCount
-                                        ),
+                                    label,
                                     fontSize = 12.sp,
                                     color = Foggy
                                 )

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.shisuan.ui.theme.Foggy
 import com.example.shisuan.ui.theme.Ink
+import java.util.Locale
 import kotlin.math.max
 
 /**
@@ -58,7 +59,7 @@ private val DonutPalette = listOf(
 fun CostTrendChart(
     data: List<Pair<String, Double>>,
     modifier: Modifier = Modifier,
-    valueLabelFormat: (Double) -> String = { "¥%,.0f".format(it) }
+    valueLabelFormat: (Double) -> String = { "¥%,.0f".format(Locale.CHINA, it) }
 ) {
     if (data.size < 2) return
     val maxValue = data.maxOf { it.second }
@@ -195,7 +196,7 @@ fun IngredientCostDonut(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            "%.0f%%".format(value / total * 100),
+                            "%.0f%%".format(Locale.CHINA, value / total * 100),
                             fontSize = 12.sp,
                             color = Foggy,
                             fontWeight = FontWeight.Medium

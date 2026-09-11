@@ -1,6 +1,7 @@
 package com.example.shisuan.data.database
 
 import androidx.room.Entity
+import androidx.room.Ignore
 import androidx.room.PrimaryKey
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -11,6 +12,10 @@ const val PRICE_UNIT_PER_KG = "元/kg"
 
 /** 单价单位：元/克 */
 const val PRICE_UNIT_PER_GRAM = "元/g"
+
+// 时间戳说明：各实体的 createdAt/updatedAt 默认值保留 System.currentTimeMillis()，
+// 以避免字段签名变更破坏现有迁移链；如需可测试性，建议后续由 Repository 注入 Clock
+// 统一赋值，而非在此改默认值。
 
 /**
  * 产品表 - 主实体
@@ -84,7 +89,9 @@ data class BatchRecord(
     /**
      * 加工费合计（元）。
      * 由分项求和得出而非单独存储，避免出现「分项改了、合计没改」的不一致。
+     * @Ignore：纯计算属性，不持久化；伴生对象 create 等不受影响。
      */
+    @Ignore
     val processingCost: Double
         get() = packagingCost + laborCost + overheadCost
 }
@@ -103,7 +110,7 @@ data class BatchRecord(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["batchId"])]
+    indices = [Index(value = ["batchId"]), Index(value = ["ingredientName", "ingredientSupplier"])]
 )
 data class BatchIngredient(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -154,8 +161,14 @@ data class BatchIngredient(
 
 /**
  * 原料库表 - 保持原有设计，略作调整
+ *
+ * (name, supplier) 唯一：配料库按名称+品牌去重（同名同品牌共享一条记录）。
+ * schema 变更见 v10 迁移（重建表并迁移数据，SQLite 不支持直接加唯一约束）。
  */
-@Entity(tableName = "ingredient")
+@Entity(
+    tableName = "ingredient",
+    indices = [Index(value = ["name", "supplier"], unique = true)]
+)
 data class Ingredient(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,

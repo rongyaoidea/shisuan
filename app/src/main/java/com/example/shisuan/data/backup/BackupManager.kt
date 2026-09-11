@@ -26,6 +26,9 @@ import javax.inject.Singleton
  * 导出：先做 WAL checkpoint 把临时日志合并回主库，再整体拷贝；
  * 导入：先落到缓存文件做完整性校验（SQLite 头 + schema 版本），
  *       再关闭现有连接、替换主库文件，最后重启进程让所有连接失效。
+ *
+ * 注意：备份文件为明文 SQLite 数据库，包含全部批次与成本数据；
+ * 请勿经不可信渠道转发，妥善保管导出文件。
  */
 @Singleton
 class BackupManager @Inject constructor(
@@ -66,6 +69,7 @@ class BackupManager @Inject constructor(
         runCatching {
             // 1. 先拷贝到缓存文件并校验，任何一步失败都不触碰现有数据
             val staging = File(context.cacheDir, "import_staging_${System.currentTimeMillis()}.db")
+            val rollbackBackup = File(context.cacheDir, "import_backup_${System.currentTimeMillis()}.db.bak")
             try {
                 context.contentResolver.openInputStream(uri)?.use { inp ->
                     staging.outputStream().use { inp.copyTo(it) }
@@ -73,8 +77,11 @@ class BackupManager @Inject constructor(
 
                 validateBackup(staging)
 
-                // 2. 记录路径后关闭当前连接（关闭后再取 path 会重新打开库）
+                // 2. 记录路径后关闭当前连接（关闭后再取 path 会重新打开库）。
+                //    先记录 dbPath，再做 checkpoint + 备份当前主库，失败可回滚。
                 val dbPath = writableDb().path ?: throw IOException("无法定位数据库文件")
+                writableDb().query("PRAGMA wal_checkpoint(FULL)").use { it.moveToFirst() }
+                File(dbPath).copyTo(rollbackBackup, overwrite = true)
                 db.close()
 
                 // 3. 替换主库文件：先删除旧 -wal / -shm，再用 rename 原子替换。
@@ -85,11 +92,20 @@ class BackupManager @Inject constructor(
                 File("$dbPath-wal").delete()
                 File("$dbPath-shm").delete()
                 if (!staging.renameTo(File(dbPath))) {
-                    throw IOException("恢复数据失败，请重试")
+                    // 回滚：把替换前的 .bak 拷回主库位置，再抛错说明已回滚
+                    runCatching {
+                        rollbackBackup.copyTo(File(dbPath), overwrite = true)
+                    }
+                    throw IOException("恢复数据失败，已回滚到恢复前的数据，请重试")
                 }
                 require(File(dbPath).length() > 0) { "恢复数据失败，请重试" }
+                // 成功后删除回滚备份
+                rollbackBackup.delete()
 
-                // 4. 重启进程：Hilt 单例、Room 连接、内存中的 Flow 全部重建
+                // 4. 重启进程：Hilt 单例、Room 连接、内存中的 Flow 全部重建。
+                //    restartApp 前同步删除 staging（双保险：finally 还会再删一次，
+                //    但重启后 finally 是否执行不可依赖）。
+                staging.delete()
                 restartApp()
             } finally {
                 staging.delete()
@@ -101,7 +117,8 @@ class BackupManager @Inject constructor(
     private fun writableDb(): SupportSQLiteDatabase = db.openHelper.writableDatabase
 
     /**
-     * 校验备份文件：SQLite 魔数 + schema 版本不超过当前应用支持的版本。
+     * 校验备份文件：SQLite 魔数 + schema 版本不超过当前应用支持的版本
+     * + PRAGMA integrity_check 完整性检查（首行须为 "ok"）。
      * 版本过高的备份在旧版应用上打开会直接崩溃，必须在这里拦下。
      */
     private fun validateBackup(file: File) {
@@ -113,11 +130,19 @@ class BackupManager @Inject constructor(
         }
         require(header.contentEquals(sqliteHeader)) { "所选文件不是食算的数据库备份" }
 
-        val version = SQLiteDatabase.openDatabase(
+        val db = SQLiteDatabase.openDatabase(
             file.absolutePath, null, SQLiteDatabase.OPEN_READONLY
-        ).use { it.version }
-        require(version <= SUPPORTED_DB_VERSION) {
-            "该备份由更新版本的食算导出，请先升级应用再恢复"
+        )
+        try {
+            require(db.version <= SUPPORTED_DB_VERSION) {
+                "该备份由更新版本的食算导出，请先升级应用再恢复"
+            }
+            db.rawQuery("PRAGMA integrity_check", null).use { cursor ->
+                val ok = cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
+                require(ok) { "备份文件完整性校验失败，可能已损坏" }
+            }
+        } finally {
+            db.close()
         }
     }
 

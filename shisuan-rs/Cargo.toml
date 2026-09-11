@@ -25,4 +25,8 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = "symbols"
+# panic=abort 保证 .so 体积最小且崩溃不跨越 JNI 边界；
+# 约束：全 crate 禁止 unwrap()/expect()/索引越界（panic 即直接 abort 掉进程），
+# 对不可信输入一律用卫语句返回错误码/零值；如确需隔离第三方 panic，须用
+# std::panic::catch_unwind 包裹（abort 下 catch_unwind 无法捕获，仅作文档约束提醒）。
 panic = "abort"

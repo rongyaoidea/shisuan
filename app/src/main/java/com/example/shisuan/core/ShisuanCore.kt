@@ -24,10 +24,43 @@ object ShisuanCore {
         try {
             System.loadLibrary(LIB_NAME)
             isLoaded = true
-            log("Rust 引擎加载成功: ${engineInfo()}")
+            log("Rust 引擎加载成功: ${engineInfo() ?: ""}")
         } catch (e: UnsatisfiedLinkError) {
             isLoaded = false
             log("Rust 引擎加载失败，将回退到 Kotlin 实现", e)
+        }
+    }
+
+    /**
+     * 后台预触发引擎加载（供 Application.onCreate 中子线程调用）。
+     * object 的 init 已在首次访问时执行，此处仅保证类已初始化；
+     * 若此前加载失败则尝试重试，不抛异常。
+     */
+    fun preloadAsync() {
+        if (isLoaded) return
+        try {
+            Class.forName("com.example.shisuan.core.ShisuanCore")
+        } catch (_: Throwable) {
+            // 忽略，仅为触发类初始化
+        }
+        retryLoad()
+    }
+
+    /**
+     * 引擎加载失败后重试，成功返回 true。
+     */
+    @Synchronized
+    fun retryLoad(): Boolean {
+        if (isLoaded) return true
+        return try {
+            System.loadLibrary(LIB_NAME)
+            isLoaded = true
+            log("Rust 引擎重试加载成功: ${engineInfo() ?: ""}")
+            true
+        } catch (e: UnsatisfiedLinkError) {
+            isLoaded = false
+            log("Rust 引擎重试加载失败", e)
+            false
         }
     }
 
@@ -45,13 +78,13 @@ object ShisuanCore {
 
     // ─────────── 原生方法（与 jni_bridge.rs 一一对应） ───────────
 
-    /** 引擎版本号 */
-    external fun version(): String
+    /** 引擎版本号（Rust 返回 null 时为 null，调用方需 ?: 处理防 NPE） */
+    external fun version(): String?
 
     /**
      * 核心成本换算。
      * @param out 长度 5 的数组：[克单价, 吨价, 每吨箱数, 箱价, 包价]
-     * @return 0=成功, -1=参数无效
+     * @return 0=成功, 2=参数无效/out 数组无效（非 0 即回退 Kotlin 实现）, -2=写回失败
      */
     external fun calculate(
         sampleWeightGram: Double,
@@ -83,6 +116,6 @@ object ShisuanCore {
      */
     external fun unitPriceToTotal(weightGram: Double, unitPrice: Double, isPerGram: Boolean): Double
 
-    /** 引擎描述（诊断用） */
-    external fun engineInfo(): String
+    /** 引擎描述（诊断用；Rust 返回 null 时为 null，调用方需 ?: "" 处理） */
+    external fun engineInfo(): String?
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.Closeable
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -18,8 +19,11 @@ import kotlin.coroutines.resumeWithException
  *
  * 基于 Google ML Kit 中文文字识别（离线模型）。
  * 识别文本交给 [IngredientTextParser] 解析为配料名称列表。
+ *
+ * 生命周期：Hilt Singleton 常驻应用进程，recognizer 无需逐次创建；
+ * 进程退出/测试 teardown 时调 [close] 释放原生资源。
  */
-class OcrAnalyzer(private val context: Context) {
+class OcrAnalyzer(private val context: Context) : Closeable {
 
     private val recognizer = TextRecognition.getClient(
         ChineseTextRecognizerOptions.Builder().build()
@@ -53,7 +57,15 @@ class OcrAnalyzer(private val context: Context) {
     /** 将 GMS Task 转为挂起函数 */
     private suspend fun <T> Task<T>.await(): T =
         suspendCancellableCoroutine { cont ->
+            val task = this@await
+            // 协程取消时同步取消底层 GMS Task，避免后台识别继续占用模型线程
+            cont.invokeOnCancellation { task.cancel() }
             addOnSuccessListener { cont.resume(it) }
             addOnFailureListener { cont.resumeWithException(it) }
         }
+
+    /** 释放 ML Kit recognizer 的原生资源（Hilt Singleton 常驻，进程退出/测试时调用） */
+    override fun close() {
+        recognizer.close()
+    }
 }

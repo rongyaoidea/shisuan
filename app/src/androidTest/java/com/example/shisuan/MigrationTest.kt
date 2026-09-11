@@ -7,8 +7,10 @@ import com.example.shisuan.data.database.CostCalDatabase
 import com.example.shisuan.data.database.MIGRATION_6_7
 import com.example.shisuan.data.database.MIGRATION_7_8
 import com.example.shisuan.data.database.MIGRATION_8_9
+import com.example.shisuan.data.database.MIGRATION_9_10
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,7 +19,7 @@ import java.io.IOException
 /**
  * Room 迁移测试（需在设备/模拟器上运行：connectedDebugAndroidTest）
  *
- * 覆盖 v6→v7 / v7→v8 / v8→v9。
+ * 覆盖 v6→v7 / v7→v8 / v8→v9 / v9→v10。
  * 说明：早期迁移（v1→v6）开发时未开启 schema 导出，缺少历史 JSON 基线，
  * 暂无法在此框架下验证；自 v7 起每个新迁移都必须补充对应测试。
  * 注意：v9 迁移测试需要先执行一次构建，让 KSP 导出 app/schemas/9.json 后才能通过。
@@ -158,6 +160,52 @@ class MigrationTest {
         ).use { c ->
             assertTrue(c.moveToFirst())
             assertEquals(0, c.getInt(0))
+        }
+        db.close()
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun `migrate 9 to 10 - 同名同品牌原料去重并建唯一索引`() {
+        // 1. 按 v9 schema 建库：v9 无唯一约束，可插入两条同名同品牌原料
+        var db = helper.createDatabase(TEST_DB, 9)
+        val insertIngredient =
+            "INSERT INTO ingredient (name, category, supplier, origin, unitPrice, priceUnit, " +
+                "shelfLifeDays, storageCondition, note, isActive, createdAt, updatedAt) VALUES "
+        db.execSQL(insertIngredient + "('白砂糖', '糖类', '品牌A', '', 12.0, '元/kg', NULL, '', '', 1, 0, 0)")
+        db.execSQL(insertIngredient + "('白砂糖', '糖类', '品牌A', '', 13.0, '元/kg', NULL, '', '', 1, 0, 0)")
+        db.execSQL(insertIngredient + "('绵白糖', '糖类', '品牌A', '', 14.0, '元/kg', NULL, '', '', 1, 0, 0)")
+        db.close()
+
+        // 2. 执行迁移（含全量 schema 校验：需先构建一次以生成 10.json）
+        db = helper.runMigrationsAndValidate(TEST_DB, 10, true, MIGRATION_9_10)
+
+        // 3. 去重：白砂糖只剩最早一条（最小 id），总数 3→2
+        db.query("SELECT COUNT(*) FROM ingredient").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(2, c.getInt(0))
+        }
+        db.query("SELECT unitPrice FROM ingredient WHERE name = '白砂糖'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(12.0, c.getDouble(0), 0.0)
+        }
+
+        // 4. 唯一索引生效：再插同名同品牌必须失败
+        try {
+            db.execSQL(insertIngredient + "('白砂糖', '糖类', '品牌A', '', 15.0, '元/kg', NULL, '', '', 1, 0, 0)")
+            fail("同名同品牌原料应触发唯一约束")
+        } catch (e: android.database.SQLException) {
+            // 预期：UNIQUE constraint failed
+        }
+
+        // 5. 两个新索引均存在
+        db.query(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name IN " +
+                "('index_ingredient_name_supplier', " +
+                "'index_batch_ingredient_ingredientName_ingredientSupplier')"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(2, c.getInt(0))
         }
         db.close()
     }

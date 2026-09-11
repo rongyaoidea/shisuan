@@ -12,6 +12,9 @@ import com.example.shisuan.ui.screen.*
 /**
  * 导航路由定义
  * 流程: 产品列表 → 产品详情 → 新建/编辑批次
+ *
+ * 保留 sealed Screen 字符串路由，不迁到类型安全导航（kotlinx.serialization 目的地）：
+ * 路由表小且稳定，大改收益低；如需深链/参数校验再整体迁移。
  */
 sealed class Screen(val route: String) {
     object ProductList : Screen("products")
@@ -46,10 +49,14 @@ fun NavGraph(modifier: Modifier = Modifier) {
         composable(Screen.ProductList.route) {
             ProductListScreen(
                 onNavigateToDetail = { productId ->
-                    navController.navigate(Screen.ProductDetail.createRoute(productId))
+                    navController.navigate(Screen.ProductDetail.createRoute(productId)) {
+                        launchSingleTop = true
+                    }
                 },
                 onNavigateToIngredientLibrary = {
-                    navController.navigate(Screen.IngredientLibrary.route)
+                    navController.navigate(Screen.IngredientLibrary.route) {
+                        launchSingleTop = true
+                    }
                 }
             )
         }
@@ -66,18 +73,24 @@ fun NavGraph(modifier: Modifier = Modifier) {
             Screen.ProductDetail.route,
             arguments = listOf(navArgument("productId") { type = NavType.LongType })
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getLong("productId") ?: return@composable
+            val productId = backStackEntry.arguments?.getLong("productId")?.takeIf { v -> v != 0L } ?: return@composable
             ProductDetailScreen(
                 productId = productId,
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToNewBatch = { id ->
-                    navController.navigate(Screen.NewBatch.createRoute(id))
+                    navController.navigate(Screen.NewBatch.createRoute(id)) {
+                        launchSingleTop = true
+                    }
                 },
                 onNavigateToEditBatch = { pid, bid ->
-                    navController.navigate(Screen.EditBatch.createRoute(pid, bid))
+                    navController.navigate(Screen.EditBatch.createRoute(pid, bid)) {
+                        launchSingleTop = true
+                    }
                 },
                 onNavigateToCopyBatch = { pid, bid ->
-                    navController.navigate(Screen.CopyBatch.createRoute(pid, bid))
+                    navController.navigate(Screen.CopyBatch.createRoute(pid, bid)) {
+                        launchSingleTop = true
+                    }
                 }
             )
         }
@@ -87,7 +100,7 @@ fun NavGraph(modifier: Modifier = Modifier) {
             Screen.NewBatch.route,
             arguments = listOf(navArgument("productId") { type = NavType.LongType })
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getLong("productId") ?: return@composable
+            val productId = backStackEntry.arguments?.getLong("productId")?.takeIf { v -> v != 0L } ?: return@composable
             NewBatchScreen(
                 productId = productId,
                 editBatchId = null,
@@ -103,8 +116,8 @@ fun NavGraph(modifier: Modifier = Modifier) {
                 navArgument("batchId") { type = NavType.LongType }
             )
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getLong("productId") ?: return@composable
-            val batchId = backStackEntry.arguments?.getLong("batchId") ?: return@composable
+            val productId = backStackEntry.arguments?.getLong("productId")?.takeIf { v -> v != 0L } ?: return@composable
+            val batchId = backStackEntry.arguments?.getLong("batchId")?.takeIf { v -> v != 0L } ?: return@composable
             NewBatchScreen(
                 productId = productId,
                 editBatchId = batchId,
@@ -120,8 +133,8 @@ fun NavGraph(modifier: Modifier = Modifier) {
                 navArgument("batchId") { type = NavType.LongType }
             )
         ) { backStackEntry ->
-            val productId = backStackEntry.arguments?.getLong("productId") ?: return@composable
-            val batchId = backStackEntry.arguments?.getLong("batchId") ?: return@composable
+            val productId = backStackEntry.arguments?.getLong("productId")?.takeIf { v -> v != 0L } ?: return@composable
+            val batchId = backStackEntry.arguments?.getLong("batchId")?.takeIf { v -> v != 0L } ?: return@composable
             NewBatchScreen(
                 productId = productId,
                 copyFromBatchId = batchId,

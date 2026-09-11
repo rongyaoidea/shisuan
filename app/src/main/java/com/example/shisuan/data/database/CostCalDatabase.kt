@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.Flow
  * v8: BatchSnapshot 增加 digest（唯一变更编号）与 (batchId, digest) 唯一索引 —— git 式版本链
  * v9: batch_record 增加 (productId, batchName) 唯一索引（批次号并发兜底）；
  *     删除自始至终无 UI 入口的 batch_problem 表
+ * v10: ingredient 增加 (name, supplier) 唯一索引（配料库去重键的 DB 层兜底，需重建表）；
+ *     batch_ingredient 增加 (ingredientName, ingredientSupplier) 复合索引（覆盖使用频次统计）
  */
 @Database(
     entities = [
@@ -28,7 +30,7 @@ import kotlinx.coroutines.flow.Flow
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 9,
+    version = 10,
     // 导出 schema 以支持迁移测试：schema JSON 位于 app/schemas/
     exportSchema = true
 )
@@ -43,7 +45,7 @@ abstract class CostCalDatabase : RoomDatabase() {
 
     companion object {
         /** 当前应用支持的 schema 版本；恢复备份时用于拒绝来自更高版本的文件 */
-        const val SUPPORTED_DB_VERSION = 9
+        const val SUPPORTED_DB_VERSION = 10
 
         @Volatile private var INSTANCE: CostCalDatabase? = null
         fun getInstance(context: android.content.Context): CostCalDatabase {
@@ -56,7 +58,7 @@ abstract class CostCalDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
                 )
                 .build().also { INSTANCE = it }
             }
@@ -107,6 +109,15 @@ interface BatchDao {
     fun getByProduct(productId: Long): Flow<List<BatchRecord>>
 
     /**
+     * TODO：批次名生成（generateBatchName）目前经 getBatchesByProduct(...).first()
+     * 全量取回批次再算最大序号；高频调用时可改用本 suspend 直查减少 IO。
+     * 并发插入冲突由 (productId, batchName) 唯一索引兜底，调用方（VM 层）捕获
+     * SQLiteConstraintException 后重试一次即可。
+     */
+    @Query("SELECT batchName FROM batch_record WHERE productId = :productId")
+    suspend fun getBatchNamesOnce(productId: Long): List<String>
+
+    /**
      * 一次查出某产品的所有批次及其配料明细（单查询替代 N 次配料查询）
      */
     @Transaction
@@ -115,6 +126,10 @@ interface BatchDao {
 
     @Query("SELECT * FROM batch_record WHERE id = :id")
     fun getById(id: Long): Flow<BatchRecord?>
+
+    /** 单次直查（供 Repository 事务内使用，避免 Flow.first() 的额外收集开销） */
+    @Query("SELECT * FROM batch_record WHERE id = :id")
+    suspend fun getByIdOnce(id: Long): BatchRecord?
 
     // ABORT 语义见 ProductDao.insert 注释；批次号冲突由 (productId, batchName) 唯一索引拦截
     @Insert
@@ -165,6 +180,10 @@ interface IngredientDao {
     /**
      * 全部活跃原料，按使用频次降序（常用前置），频次同值按名称升序。
      * 配料库列表与批次录入的原料选择器共用，让高频原料唾手可得。
+     *
+     * 注：逐行 COUNT(DISTINCT batchId) 子查询予以保留；v10 新增的
+     * batch_ingredient(ingredientName, ingredientSupplier) 复合索引覆盖该关联条件，
+     * 避免无索引时全表扫描放大。
      */
     @Query("""
         SELECT i.*, (
@@ -231,6 +250,13 @@ interface SnapshotDao {
 interface LogDao {
     @Insert
     suspend fun insert(log: OperationLog)
+
+    /**
+     * 操作日志保留策略：仅保留最新 [keepLatest] 条，防止 operation_log 无限增长。
+     * 由 CostRepository 每次写日志后调用（同事务内），VM 层无需直接调用。
+     */
+    @Query("DELETE FROM operation_log WHERE id NOT IN (SELECT id FROM operation_log ORDER BY id DESC LIMIT :keepLatest)")
+    suspend fun deleteOldLogs(keepLatest: Int = 500)
 }
 
 /**
@@ -472,5 +498,65 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         )
         // 3. 移除无 UI 的表
         database.execSQL("DROP TABLE IF EXISTS batch_problem")
+    }
+}
+
+/**
+ * 数据库迁移：v9 → v10
+ * 1. ingredient 增加 (name, supplier) 唯一索引 —— SQLite 不支持直接加唯一约束，
+ *    采用「建新表-拷贝-删旧表-重命名」模式；建索引前按 (name, supplier) 去重
+ *    （保留最小 id），否则存量重复行会让 CREATE UNIQUE INDEX 直接失败。
+ * 2. batch_ingredient 增加 (ingredientName, ingredientSupplier) 复合索引，
+ *    覆盖 IngredientDao.getAllActiveWithUseCount 的关联统计条件。
+ *
+ * 外键说明：PRAGMA foreign_keys 在迁移期间由 Room 的 MigrationHelper 统一处理
+ * （迁移前后保存并恢复外键开关，事务内执行）；此处不手动开关，避免与框架逻辑冲突。
+ * 表重建期间 batch_ingredient.ingredientId 悬空引用由事务原子性保证，
+ * ingredient.id 沿用原值拷贝故关联不断裂。
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 原料去重：同名同品牌只保留最早一条（最小 id）
+        database.execSQL(
+            "DELETE FROM ingredient WHERE id NOT IN " +
+                "(SELECT MIN(id) FROM ingredient GROUP BY name, supplier)"
+        )
+        // 2. 建新表（与 v10 Ingredient 实体声明一致）
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS ingredient_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                supplier TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                unitPrice REAL NOT NULL,
+                priceUnit TEXT NOT NULL,
+                shelfLifeDays INTEGER,
+                storageCondition TEXT NOT NULL,
+                note TEXT NOT NULL,
+                isActive INTEGER NOT NULL,
+                createdAt INTEGER NOT NULL,
+                updatedAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+        // 3. 拷贝数据
+        database.execSQL("""
+            INSERT INTO ingredient_new (id, name, category, supplier, origin, unitPrice, priceUnit, shelfLifeDays, storageCondition, note, isActive, createdAt, updatedAt)
+            SELECT id, name, category, supplier, origin, unitPrice, priceUnit, shelfLifeDays, storageCondition, note, isActive, createdAt, updatedAt
+            FROM ingredient
+        """.trimIndent())
+        // 4. 删旧表、重命名
+        database.execSQL("DROP TABLE ingredient")
+        database.execSQL("ALTER TABLE ingredient_new RENAME TO ingredient")
+        // 5. 唯一索引（与 Ingredient 实体声明一致，Room 校验 schema 用）
+        database.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS index_ingredient_name_supplier " +
+                "ON ingredient(name, supplier)"
+        )
+        // 6. batch_ingredient 复合索引（覆盖使用频次统计的关联条件）
+        database.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_batch_ingredient_ingredientName_ingredientSupplier " +
+                "ON batch_ingredient(ingredientName, ingredientSupplier)"
+        )
     }
 }

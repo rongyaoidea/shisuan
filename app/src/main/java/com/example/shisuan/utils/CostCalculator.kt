@@ -46,11 +46,20 @@ object CostCalculator {
         packagesPerBox: Int,
         yieldRatePercent: Double? = null
     ): CostResult {
+        // 统一 sanitize：任一关键输入非有限直接返回零值，避免 NaN/Inf 污染后续换算；
+        // 负物料/加工费钳零（成本域非负），与 Rust 引擎行为对齐。
+        if (!sampleWeightGram.isFinite() || !materialCost.isFinite() ||
+            !processingCost.isFinite() || !weightPerBoxGram.isFinite()
+        ) {
+            return CostResult(0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+        val safeMaterialCost = materialCost.coerceAtLeast(0.0)
+        val safeProcessingCost = processingCost.coerceAtLeast(0.0)
         val effectiveWeight = effectiveWeightGram(sampleWeightGram, yieldRatePercent)
         if (rustAvailable) {
             val out = DoubleArray(5)
             val code = ShisuanCore.calculate(
-                effectiveWeight, materialCost, processingCost,
+                effectiveWeight, safeMaterialCost, safeProcessingCost,
                 weightPerBoxGram, packagesPerBox, out
             )
             if (code == 0) {
@@ -59,7 +68,7 @@ object CostCalculator {
             // Rust 返回无效参数时回退到 Kotlin 计算（保持行为一致）
         }
         return calculateKotlin(
-            effectiveWeight, materialCost, processingCost,
+            effectiveWeight, safeMaterialCost, safeProcessingCost,
             weightPerBoxGram, packagesPerBox
         )
     }
@@ -70,7 +79,7 @@ object CostCalculator {
      * 合法区间为 (0, 100]：
      * - null / <=0：按 100% 计（不折算），兼容未录入出品率的历史批次
      * - >100：视为无效录入 —— 折算出大于投料的「产量」会低估成本，
-     *   与其放大产量不如按 100% 保守处理
+     *   与其放大产量不如按 100% 保守处理（此分支为有意为之，保持不变）
      */
     fun effectiveWeightGram(sampleWeightGram: Double, yieldRatePercent: Double?): Double {
         if (sampleWeightGram <= 0.0) return sampleWeightGram
@@ -114,14 +123,14 @@ object CostCalculator {
     }
 
     /**
-     * 保留两位小数
+     * 保留两位小数。
+     *
+     * 常驻 Kotlin 实现，不再走 JNI：舍入为高频调用，JNI 往返开销远大于计算本身，
+     * 且 Kotlin round（half-up toward +Inf）与 Rust round（half-away）在成本域
+     * 非负输入下行为一致。
      */
     fun round2(value: Double): Double {
-        return if (rustAvailable) {
-            ShisuanCore.round2(value)
-        } else {
-            kotlin.math.round(value * 100.0) / 100.0
-        }
+        return kotlin.math.round(value * 100.0) / 100.0
     }
 
     /**
@@ -129,17 +138,16 @@ object CostCalculator {
      * @param isPerGram true=单价为元/g，false=元/kg
      */
     fun unitPriceToTotal(weightGram: Double, unitPrice: Double, isPerGram: Boolean = false): Double {
+        // Kotlin 先拦截：非法重量/负单价/非有限一律返回 0，避免坏值进入 JNI；
+        // Rust 仍可被直接调用（其内部亦有同等卫语句），此处前置校验保证双路径一致。
+        if (weightGram <= 0.0 || unitPrice < 0.0 || !weightGram.isFinite() || !unitPrice.isFinite()) {
+            return 0.0
+        }
         return if (rustAvailable) {
             ShisuanCore.unitPriceToTotal(weightGram, unitPrice, isPerGram)
         } else {
-            // 防御与 Rust 版（shisuan-rs calc.rs）对齐：
-            // 无效重量/负单价一律返回 0，避免两条路径对同一输入给出不同结果
-            if (weightGram <= 0.0 || unitPrice < 0.0 || !weightGram.isFinite() || !unitPrice.isFinite()) {
-                0.0
-            } else {
-                val pricePerGram = if (isPerGram) unitPrice else unitPrice / 1000.0
-                round2Kotlin(weightGram * pricePerGram)
-            }
+            val pricePerGram = if (isPerGram) unitPrice else unitPrice / 1000.0
+            round2Kotlin(weightGram * pricePerGram)
         }
     }
 
@@ -148,6 +156,8 @@ object CostCalculator {
      * 香精/添加剂微量场景，如样品 1000g、比例 0.05% → 0.5g
      */
     fun ratioPercentToGram(sampleWeightGram: Double, ratioPercent: Double): Double {
+        if (!sampleWeightGram.isFinite() || !ratioPercent.isFinite()) return 0.0
+        if (sampleWeightGram <= 0.0) return 0.0
         return sampleWeightGram * ratioPercent / 100.0
     }
 
@@ -163,10 +173,17 @@ object CostCalculator {
         weightPerBoxGram: Double,
         packagesPerBox: Int
     ): CostResult {
+        if (!sampleWeightGram.isFinite() || !materialCost.isFinite() ||
+            !processingCost.isFinite() || !weightPerBoxGram.isFinite()
+        ) {
+            return CostResult(0.0, 0.0, 0.0, 0.0, 0.0)
+        }
+        val safeMaterial = materialCost.coerceAtLeast(0.0)
+        val safeProcessing = processingCost.coerceAtLeast(0.0)
         if (sampleWeightGram <= 0.0 || weightPerBoxGram <= 0.0 || packagesPerBox <= 0) {
             return CostResult(0.0, 0.0, 0.0, 0.0, 0.0)
         }
-        val totalCost = materialCost + processingCost
+        val totalCost = safeMaterial + safeProcessing
         val unitCostPerGram = totalCost / sampleWeightGram
         val unitCostPerTon = unitCostPerGram * 1_000_000.0
         val boxesPerTon = 1_000_000.0 / weightPerBoxGram

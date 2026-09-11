@@ -41,3 +41,27 @@ fun toUtcDateMillis(epochMillis: Long): Long {
         .toLocalDate()
     return localDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
 }
+
+/** 快照时间线：epoch 毫秒 → 本地 "MM-dd HH:mm"（供版本历史行展示，移出组合便于复用/测试） */
+fun formatSnapshotTime(createdAt: Long): String {
+    val t = Instant.ofEpochMilli(createdAt)
+        .atZone(ZoneId.systemDefault())
+        .toLocalDateTime()
+    return String.format(
+        java.util.Locale.CHINA,
+        "%02d-%02d %02d:%02d",
+        t.monthValue, t.dayOfMonth, t.hour, t.minute
+    )
+}
+
+/** 快照配料计数：snapshotData 中行首为 "ING" 的行数 */
+fun countSnapshotIngredients(snapshotData: String): Int =
+    snapshotData.lines().count { it.startsWith("ING") }
+
+/** 快照行标签："v{version} · {MM-dd HH:mm} · {N} 种配料" */
+fun formatSnapshotLabel(version: Int, createdAt: Long, ingredientCount: Int): String =
+    String.format(
+        java.util.Locale.CHINA,
+        "v%d · %s · %d 种配料",
+        version, formatSnapshotTime(createdAt), ingredientCount
+    )

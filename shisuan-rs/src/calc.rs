@@ -43,6 +43,23 @@ impl CostCalculator {
         weight_per_box_gram: f64,
         packages_per_box: i32,
     ) -> CostResult {
+        // 卫语句：任一关键输入非有限（NaN/Inf）直接返回零值，与 Kotlin 侧 sanitize 一致。
+        if !sample_weight_gram.is_finite()
+            || !material_cost.is_finite()
+            || !processing_cost.is_finite()
+            || !weight_per_box_gram.is_finite()
+        {
+            return CostResult {
+                unit_cost_per_gram: 0.0,
+                unit_cost_per_ton: 0.0,
+                boxes_per_ton: 0.0,
+                cost_per_box: 0.0,
+                cost_per_package: 0.0,
+            };
+        }
+        // 成本域非负：负物料/加工费钳零，与 Kotlin 侧 coerceAtLeast(0.0) 对齐。
+        let material_cost = material_cost.max(0.0);
+        let processing_cost = processing_cost.max(0.0);
         if sample_weight_gram <= 0.0 || weight_per_box_gram <= 0.0 || packages_per_box <= 0 {
             return CostResult {
                 unit_cost_per_gram: 0.0,
@@ -89,7 +106,10 @@ impl CostCalculator {
         })
     }
 
-    /// 保留两位小数
+    /// 保留两位小数（half-away from zero）。
+    ///
+    /// 注：与 Kotlin `kotlin.math.round`（half-up toward +Inf）在负数 -x.xx5 处
+    /// 差 1 分钱；但成本域输入经非负钳零后恒 >= 0，该差异无影响，故保持此实现。
     pub fn round2(value: f64) -> f64 {
         (value * 100.0).round() / 100.0
     }
@@ -99,6 +119,10 @@ impl CostCalculator {
     /// - `is_per_gram=true`  单价单位为 元/g
     /// - `is_per_gram=false` 单价单位为 元/kg（默认）
     pub fn unit_price_to_total(weight_gram: f64, unit_price: f64, is_per_gram: bool) -> f64 {
+        // 卫语句：非有限输入返回 0.0，与 Kotlin 侧先拦截行为一致。
+        if !weight_gram.is_finite() || !unit_price.is_finite() {
+            return 0.0;
+        }
         if weight_gram <= 0.0 || unit_price < 0.0 {
             return 0.0;
         }

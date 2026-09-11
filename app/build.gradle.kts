@@ -14,9 +14,15 @@ android {
         applicationId = "com.example.shisuan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.8.1"
+        versionCode = 11
+        versionName = "1.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Rust .so 按 ABI 分包：只打包真机常用 ABI，减小 APK 体积；
+        // x86/x86_64 仅模拟器需要，jniLibs 仍保留文件以便本地调试，发布包过滤。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // 发布签名：由环境变量驱动，未配置时保持未签名（不影响日常构建）
@@ -74,9 +80,17 @@ android {
             // Robolectric 需要访问打包资源
             isIncludeAndroidResources = true
             all {
-                // android-all 运行时 jar 改走阿里云镜像（默认 maven central 在部分网络不可达）
-                it.systemProperty("robolectric.dependency.repo.url", "https://maven.aliyun.com/repository/public")
-                it.systemProperty("robolectric.dependency.repo.id", "aliyun")
+                // android-all 运行时 jar 镜像：默认阿里云（国内可达），
+                // CI/海外可经 ROBOLECTRIC_REPO_URL / ROBOLECTRIC_REPO_ID 环境变量覆盖
+                it.systemProperty(
+                    "robolectric.dependency.repo.url",
+                    System.getenv("ROBOLECTRIC_REPO_URL")
+                        ?: "https://maven.aliyun.com/repository/public"
+                )
+                it.systemProperty(
+                    "robolectric.dependency.repo.id",
+                    System.getenv("ROBOLECTRIC_REPO_ID") ?: "aliyun"
+                )
             }
         }
     }
@@ -86,6 +100,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // AGP 8.5 / Kotlin 2.0：kotlinOptions.jvmTarget 已废弃，计划迁往
+    // compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }；
+    // 为避免编译失败暂保留原写法（功能等价），升级 AGP 8.7+ 后再迁移。
+    // noinspection KotlinOptionsDeprecated
     kotlinOptions {
         jvmTarget = "17"
     }

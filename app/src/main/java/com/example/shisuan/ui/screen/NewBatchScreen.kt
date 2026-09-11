@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.BatchIngredient
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
@@ -50,6 +51,10 @@ import com.example.shisuan.utils.CostCalculator
 import com.example.shisuan.utils.WeightFormatter
 import com.example.shisuan.utils.formatDateMillis
 import java.io.File
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 新建/编辑批次页 - 配置原料配料
@@ -75,24 +80,24 @@ fun NewBatchScreen(
     var showOcrSource by remember { mutableStateOf(false) }
     var showProcessingCost by remember { mutableStateOf(false) } // 加工费折叠区
 
-    val ingredients by viewModel.ingredients.collectAsState()
-    val allIngredients by viewModel.allIngredients.collectAsState()
-    val totalMaterialCost by viewModel.totalMaterialCost.collectAsState()
-    val totalProcessingCost by viewModel.totalProcessingCost.collectAsState()
-    val ocrScanning by viewModel.ocrScanning.collectAsState()
-    val batchNamePreview by viewModel.batchNamePreview.collectAsState()
-    val errorMessage by viewModel.error.collectAsState()
-    val saving by viewModel.saving.collectAsState()
+    val ingredients by viewModel.ingredients.collectAsStateWithLifecycle()
+    val allIngredients by viewModel.allIngredients.collectAsStateWithLifecycle()
+    val totalMaterialCost by viewModel.totalMaterialCost.collectAsStateWithLifecycle()
+    val totalProcessingCost by viewModel.totalProcessingCost.collectAsStateWithLifecycle()
+    val ocrScanning by viewModel.ocrScanning.collectAsStateWithLifecycle()
+    val batchNamePreview by viewModel.batchNamePreview.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.error.collectAsStateWithLifecycle()
+    val saving by viewModel.saving.collectAsStateWithLifecycle()
 
     // 表单状态来自 ViewModel，配置变更后仍可恢复
-    val sampleWeight by viewModel.sampleWeight.collectAsState()
-    val note by viewModel.note.collectAsState()
-    val batchDateMillis by viewModel.batchDateMillis.collectAsState()
-    val canSubmit by viewModel.canSubmit.collectAsState()
-    val packagingCost by viewModel.packagingCost.collectAsState()
-    val laborCost by viewModel.laborCost.collectAsState()
-    val overheadCost by viewModel.overheadCost.collectAsState()
-    val yieldRate by viewModel.yieldRate.collectAsState()
+    val sampleWeight by viewModel.sampleWeight.collectAsStateWithLifecycle()
+    val note by viewModel.note.collectAsStateWithLifecycle()
+    val batchDateMillis by viewModel.batchDateMillis.collectAsStateWithLifecycle()
+    val canSubmit by viewModel.canSubmit.collectAsStateWithLifecycle()
+    val packagingCost by viewModel.packagingCost.collectAsStateWithLifecycle()
+    val laborCost by viewModel.laborCost.collectAsStateWithLifecycle()
+    val overheadCost by viewModel.overheadCost.collectAsStateWithLifecycle()
+    val yieldRate by viewModel.yieldRate.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(errorMessage) {
@@ -145,34 +150,43 @@ fun NewBatchScreen(
     }
 
     // 最后声明 openCamera（引用 takePictureLauncher）
+    // 文件 IO 移到 Dispatchers.IO，避免 listFiles/delete 阻塞主线程导致掉帧
+    val scope = rememberCoroutineScope()
     val openCamera: () -> Unit = {
-        val dir = androidx.core.content.ContextCompat.getExternalFilesDirs(context, null)
-            .firstOrNull()
-        if (dir != null) {
-            // 固定文件名复用：每次拍照覆盖同一文件，不再累积占用存储；
-            // 顺带清理旧版本「时间戳文件名」策略遗留的图片
-            dir.listFiles { f -> f.name.startsWith("ocr_") && f.name != "ocr_capture.jpg" }
-                ?.forEach { it.delete() }
-            val file = File(dir, "ocr_capture.jpg")
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
-            cameraUri = uri
-            // 先检查是否有相机应用，避免 ActivityNotFoundException 闪退
-            val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            if (captureIntent.resolveActivity(context.packageManager) != null) {
-                try {
-                    takePictureLauncher.launch(uri)
-                } catch (e: ActivityNotFoundException) {
-                    Toast.makeText(context, "无法打开相机", Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val dir = withContext(Dispatchers.IO) {
+                val d = androidx.core.content.ContextCompat.getExternalFilesDirs(context, null)
+                    .firstOrNull()
+                if (d != null) {
+                    // 固定文件名复用：每次拍照覆盖同一文件，不再累积占用存储；
+                    // 顺带清理旧版本「时间戳文件名」策略遗留的图片
+                    d.listFiles { f -> f.name.startsWith("ocr_") && f.name != "ocr_capture.jpg" }
+                        ?.forEach { it.delete() }
+                }
+                d
+            }
+            if (dir != null) {
+                val file = File(dir, "ocr_capture.jpg")
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+                cameraUri = uri
+                // 先检查是否有相机应用，避免 ActivityNotFoundException 闪退
+                val captureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                if (captureIntent.resolveActivity(context.packageManager) != null) {
+                    try {
+                        takePictureLauncher.launch(uri)
+                    } catch (e: ActivityNotFoundException) {
+                        Toast.makeText(context, "无法打开相机", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(context, "未检测到相机应用", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                Toast.makeText(context, "未检测到相机应用", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "无法访问存储目录", Toast.LENGTH_SHORT).show()
             }
-        } else {
-            Toast.makeText(context, "无法访问存储目录", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -278,7 +292,7 @@ fun NewBatchScreen(
                     val yieldPreview = yieldRate.toDoubleOrNull() ?: 0.0
                     if (weightForPreview > 0 && yieldPreview in 0.0001..100.0) {
                         Text(
-                            "投料 ${WeightFormatter.format(weightForPreview)} × ${"%.1f".format(yieldPreview)}% ≈ 成品 ${WeightFormatter.format(weightForPreview * yieldPreview / 100)}，成本将按成品重量折算",
+                            "投料 ${WeightFormatter.format(weightForPreview)} × ${"%.1f".format(Locale.CHINA, yieldPreview)}% ≈ 成品 ${WeightFormatter.format(weightForPreview * yieldPreview / 100)}，成本将按成品重量折算",
                             fontSize = 12.sp,
                             color = Foggy
                         )
@@ -412,7 +426,7 @@ fun NewBatchScreen(
                     ) {
                         Text("原料成本", color = Foggy)
                         Text(
-                            "¥%,.2f".format(totalMaterialCost),
+                            "¥%,.2f".format(Locale.CHINA, totalMaterialCost),
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -423,7 +437,7 @@ fun NewBatchScreen(
                         ) {
                             Text("加工费", color = Foggy)
                             Text(
-                                "¥%,.2f".format(totalProcessingCost),
+                                "¥%,.2f".format(Locale.CHINA, totalProcessingCost),
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -435,7 +449,7 @@ fun NewBatchScreen(
                     ) {
                         Text("总成本", fontWeight = FontWeight.Bold)
                         Text(
-                            "¥%,.2f".format(totalMaterialCost + totalProcessingCost),
+                            "¥%,.2f".format(Locale.CHINA, totalMaterialCost + totalProcessingCost),
                             fontWeight = FontWeight.Bold,
                             color = Rausch
                         )
@@ -576,16 +590,16 @@ private fun IngredientRow(
             )
             Text(
                 if (ingredient.ratioPercent != null) {
-                    "${"%.4f".format(ingredient.ratioPercent)}% · ${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
+                    "${"%.4f".format(Locale.CHINA, ingredient.ratioPercent)}% · ${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(Locale.CHINA, ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 } else {
-                    "${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
+                    "${WeightFormatter.format(ingredient.weight)} × ¥${"%.2f".format(Locale.CHINA, ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}"
                 },
                 fontSize = 12.sp,
                 color = Foggy
             )
         }
         Text(
-            "¥${"%.2f".format(ingredient.totalCost)}",
+            "¥${"%.2f".format(Locale.CHINA, ingredient.totalCost)}",
             fontWeight = FontWeight.SemiBold,
             color = Ink
         )
@@ -603,297 +617,4 @@ private fun IngredientRow(
     }
 }
 
-/**
- * 原料选择器底部抽屉
- * 支持从原料库选择、快速添加新原料入库、OCR 拍照识别配料表
- *
- * 用量支持两种模式：
- * - 克重 (g)：直接填克重
- * - 比例 (%)：填占样品重量的百分比（香精/添加剂微量场景），按样品重量换算克重
- * 单价一律取原料库库存价，不再重复填写。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun IngredientPickerSheet(
-    ingredients: List<Ingredient>,
-    sampleWeightGram: Double = 0.0,
-    onDismiss: () -> Unit,
-    onPick: (Ingredient, Double, Double?) -> Unit, // 原料, 克重, 比例%(null=按克重)
-    onCreateIngredient: (String, String, String, Double) -> Unit = { _, _, _, _ -> },
-    onOcrScan: () -> Unit = {}
-) {
-    var selected by remember { mutableStateOf<Ingredient?>(null) }
-    var weight by remember { mutableStateOf("") }
-    var usePercent by remember { mutableStateOf(false) }
-    var showQuickAdd by remember { mutableStateOf(false) }
-    var search by remember { mutableStateOf("") }
-    var newName by remember { mutableStateOf("") }
-    var newBrand by remember { mutableStateOf("") }
-    var newCategory by remember { mutableStateOf("") }
-    var newPrice by remember { mutableStateOf("") }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .navigationBarsPadding()
-                .imePadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("选择原料", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-
-            // OCR 识别入口
-            OutlinedButton(
-                onClick = onOcrScan,
-                modifier = Modifier.fillMaxWidth(),
-                shape = PillShape
-            ) {
-                Icon(Camera, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("拍照识别配料表")
-            }
-
-            if (ingredients.isEmpty() || showQuickAdd) {
-                // 快速添加原料入库
-                Text(
-                    if (ingredients.isEmpty()) "原料库为空，先添加一种原料" else "新原料入库",
-                    fontSize = 13.sp,
-                    color = Foggy
-                )
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("原料名称 *") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = newBrand,
-                    onValueChange = { newBrand = it },
-                    label = { Text("品牌（可选）") },
-                    placeholder = { Text("留空=不区分品牌") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = newCategory,
-                    onValueChange = { newCategory = it },
-                    label = { Text("分类（可选）") },
-                    placeholder = { Text("如：水果 / 糖类 / 添加剂") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                TextChipsRow(
-                    options = listOf("水果", "蔬菜", "蛋类", "乳制品", "糖类", "粮油", "添加剂", "包材", "其他"),
-                    current = newCategory,
-                    onPick = { newCategory = it }
-                )
-                StepperNumberField(
-                    value = newPrice,
-                    onValueChange = { newPrice = it },
-                    label = "参考单价",
-                    step = 0.5,
-                    suffix = "元/kg"
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (ingredients.isNotEmpty()) {
-                        OutlinedButton(
-                            onClick = { showQuickAdd = false },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("返回选择") }
-                    }
-                    Button(
-                        onClick = {
-                            val p = newPrice.toDoubleOrNull() ?: 0.0
-                            if (newName.isNotBlank()) {
-                                onCreateIngredient(newName.trim(), newBrand.trim(), newCategory.trim(), p)
-                                newName = ""; newBrand = ""; newCategory = ""; newPrice = ""
-                                showQuickAdd = false
-                            }
-                        },
-                        enabled = newName.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = Rausch)
-                    ) { Text("入库") }
-                }
-            } else {
-                // 搜索过滤：原料多时免滚动查找；名称或品牌匹配，忽略大小写
-                val filtered = if (search.isBlank()) ingredients else ingredients.filter {
-                    it.name.contains(search, ignoreCase = true) ||
-                        it.supplier.contains(search, ignoreCase = true)
-                }
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    label = { Text("搜索原料名称 / 品牌") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (filtered.isEmpty()) {
-                    Text(
-                        "没有匹配「${search.trim()}」的原料，可点下方「新原料入库」",
-                        fontSize = 12.sp,
-                        color = WarningOrange
-                    )
-                } else {
-                    // 原料列表
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 200.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        itemsIndexed(filtered) { _, ingredient ->
-                            val isSelected = selected?.id == ingredient.id
-                            Card(
-                                onClick = { selected = ingredient },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = ButtonShape,
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isSelected)
-                                        RauschDisabled else MaterialTheme.colorScheme.surface
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(ingredient.name, fontWeight = FontWeight.Medium)
-                                        Row {
-                                            if (ingredient.supplier.isNotEmpty()) {
-                                                Text(
-                                                    "${ingredient.supplier} ·",
-                                                    fontSize = 11.sp,
-                                                    color = Foggy
-                                                )
-                                            }
-                                            if (ingredient.category.isNotEmpty()) {
-                                                Text(
-                                                    ingredient.category,
-                                                    fontSize = 11.sp,
-                                                    color = Foggy
-                                                )
-                                            }
-                                            if (ingredient.unitPrice > 0) {
-                                                Text(
-                                                    " · ¥${"%.2f".format(ingredient.unitPrice)}/${ingredient.priceUnit.removePrefix("元/")}",
-                                                    fontSize = 11.sp,
-                                                    color = Foggy
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                OutlinedButton(
-                    onClick = { showQuickAdd = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Add, null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("新原料入库")
-                }
-
-                // 用量输入（克重 / 比例两种模式）
-                selected?.let { ing ->
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    // 输入模式切换
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = !usePercent,
-                            onClick = { usePercent = false },
-                            label = { Text("克重 (g)", fontSize = 13.sp) }
-                        )
-                        FilterChip(
-                            selected = usePercent,
-                            onClick = { usePercent = true },
-                            label = { Text("比例 (%)", fontSize = 13.sp) }
-                        )
-                    }
-                    if (usePercent) {
-                        StepperNumberField(
-                            value = weight,
-                            onValueChange = { weight = it },
-                            label = "占样品比例 (%)",
-                            step = 0.01,
-                            placeholder = "如 0.05（万分之五）"
-                        )
-                        QuickChipsRow(
-                            options = listOf(0.01, 0.05, 0.1, 0.5, 1.0),
-                            currentText = weight,
-                            onPick = { weight = formatNumber(it, 2) },
-                            places = 2,
-                            suffix = "%"
-                        )
-                        val pct = weight.toDoubleOrNull() ?: 0.0
-                        if (sampleWeightGram > 0 && pct > 0) {
-                            Text(
-                                "按样品 ${WeightFormatter.format(sampleWeightGram)} 换算 ≈ ${WeightFormatter.format(CostCalculator.ratioPercentToGram(sampleWeightGram, pct))}",
-                                fontSize = 12.sp,
-                                color = Foggy
-                            )
-                        } else if (sampleWeightGram <= 0) {
-                            Text(
-                                "请先在上方填写「样品重量」，才能按比例换算",
-                                fontSize = 12.sp,
-                                color = WarningOrange
-                            )
-                        }
-                    } else {
-                        StepperNumberField(
-                            value = weight,
-                            onValueChange = { weight = it },
-                            label = "用量 (g)",
-                            step = 1.0
-                        )
-                        QuickChipsRow(
-                            options = listOf(1.0, 5.0, 10.0, 20.0, 50.0, 100.0),
-                            currentText = weight,
-                            onPick = { weight = formatNumber(it, 0) },
-                            places = 0,
-                            suffix = "g"
-                        )
-                    }
-                    // 单价只读：取原料库库存价，避免重复填写
-                    Text(
-                        if (ing.unitPrice > 0)
-                            "单价（库存）：¥${"%.2f".format(ing.unitPrice)}/${ing.priceUnit.removePrefix("元/")}"
-                        else "该原料未设置库存单价，成本按 ¥0 计",
-                        fontSize = 12.sp,
-                        color = Foggy
-                    )
-                    Button(
-                        onClick = {
-                            if (usePercent) {
-                                val pct = weight.toDoubleOrNull() ?: return@Button
-                                if (pct > 0 && sampleWeightGram > 0) {
-                                    val grams = CostCalculator.ratioPercentToGram(sampleWeightGram, pct)
-                                    onPick(ing, grams, pct)
-                                }
-                            } else {
-                                val w = weight.toDoubleOrNull() ?: return@Button
-                                if (w > 0) onPick(ing, w, null)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = if (usePercent) {
-                            (weight.toDoubleOrNull() ?: 0.0) > 0 && sampleWeightGram > 0
-                        } else {
-                            (weight.toDoubleOrNull() ?: 0.0) > 0
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Rausch)
-                    ) {
-                        Text("添加")
-                    }
-                }
-            }
-        }
-    }
-}
+// 注：IngredientPickerSheet 已拆至同包 IngredientPickerSheet.kt（原同文件超 300 行）。

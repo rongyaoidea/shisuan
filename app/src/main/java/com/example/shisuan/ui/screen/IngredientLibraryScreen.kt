@@ -13,6 +13,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.Ingredient
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.components.StepperNumberField
@@ -24,6 +25,7 @@ import com.example.shisuan.ui.icons.Edit
 import com.example.shisuan.ui.icons.Flask
 import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.IngredientLibraryViewModel
+import java.util.Locale
 
 /**
  * 配料库页 - 全局原料管理
@@ -36,8 +38,8 @@ fun IngredientLibraryScreen(
     onNavigateBack: () -> Unit,
     viewModel: IngredientLibraryViewModel = hiltViewModel()
 ) {
-    val ingredients by viewModel.ingredients.collectAsState()
-    val errorMessage by viewModel.error.collectAsState()
+    val ingredients by viewModel.ingredients.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.error.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Ingredient?>(null) }
     var pendingDelete by remember { mutableStateOf<Ingredient?>(null) }
@@ -119,7 +121,7 @@ fun IngredientLibraryScreen(
                                             append(" · ")
                                         }
                                         append("¥")
-                                        append("%.2f".format(ingredient.unitPrice))
+                                        append("%.2f".format(Locale.CHINA, ingredient.unitPrice))
                                         append("/kg")
                                     },
                                     fontSize = 12.sp,
@@ -217,7 +219,7 @@ private fun IngredientEditDialog(
     var category by remember { mutableStateOf(initial?.category ?: "") }
     var price by remember {
         mutableStateOf(
-            initial?.takeIf { it.unitPrice > 0 }?.let { "%.2f".format(it.unitPrice) } ?: ""
+            initial?.takeIf { it.unitPrice > 0 }?.let { "%.2f".format(Locale.CHINA, it.unitPrice) } ?: ""
         )
     }
 

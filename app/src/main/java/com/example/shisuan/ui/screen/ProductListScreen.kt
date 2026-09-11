@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.Product
 import com.example.shisuan.ui.animation.entranceAnimation
 import com.example.shisuan.ui.animation.pressScale
@@ -52,24 +53,36 @@ fun ProductListScreen(
     viewModel: ProductViewModel = hiltViewModel(),
     backupViewModel: BackupViewModel = hiltViewModel()
 ) {
-    val products by viewModel.products.collectAsState()
-    val errorMessage by viewModel.error.collectAsState()
+    val products by viewModel.products.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.error.collectAsStateWithLifecycle()
     var showNewProductDialog by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf(false) } // 二次确认导入
     var pendingDeleteProduct by remember { mutableStateOf<Product?>(null) } // 长按删除确认
 
     // 备份操作提示（成功与失败共用）
-    val backupMessage by backupViewModel.message.collectAsState()
-    val backupError by backupViewModel.error.collectAsState()
+    val backupMessage by backupViewModel.message.collectAsStateWithLifecycle()
+    val backupError by backupViewModel.error.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(errorMessage, backupMessage, backupError) {
-        (backupMessage ?: backupError ?: errorMessage)?.let {
+    // 三条消息通道各自独立消费：合在一个 LaunchedEffect(key=三者) 里只有首条能展示，
+    // 其余会被覆盖丢失。拆开后各自展示完各自清空。
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeError()
+        }
+    }
+    LaunchedEffect(backupMessage) {
+        backupMessage?.let {
             snackbarHostState.showSnackbar(it)
             backupViewModel.consumeMessage()
+        }
+    }
+    LaunchedEffect(backupError) {
+        backupError?.let {
+            snackbarHostState.showSnackbar(it)
             backupViewModel.consumeError()
-            viewModel.consumeError()
         }
     }
 

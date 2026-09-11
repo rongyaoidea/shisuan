@@ -9,15 +9,16 @@ use jni::sys::{jboolean, jdouble, jdoubleArray, jint, jstring};
 
 use crate::calc::CostCalculator;
 
-const ERROR_OUT_OF_MEMORY: jint = -2; // 内部保留
-const ERROR_INVALID_ARGS: jint = 2;   // out 数组为 null 或长度不足（Kotlin 侧非 0 即回退实现）
+const ERROR_OUT_OF_MEMORY: jint = -2; // 写回 out 数组失败
+const ERROR_INVALID_ARGS: jint = 2; // out 数组为 null 或长度不足，或数值输入非有限（Kotlin 侧非 0 即回退实现）
 const OK: jint = 0;
 
 /// 引擎版本号
 const ENGINE_VERSION: &str = "1.0.0";
 
 // ──────────────────────────────────────────────
-// Kotlin: external fun version(): String
+// Kotlin: external fun version(): String?
+// Rust 建串失败时返回 null，Kotlin 侧需 ?: 处理防 NPE
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_version(
@@ -38,7 +39,8 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_version(
 //   ): Int
 //
 // out 数组 5 个元素: [克单价, 吨价, 每吨箱数, 箱价, 包价]
-// 返回 0 = 成功，1 = 无效参数（Kotlin 侧非 0 即回退 Kotlin 实现），-2 = 写回失败
+// 返回 OK(0) = 成功，ERROR_INVALID_ARGS(2) = 参数无效/out 数组无效（Kotlin 侧非 0 即回退 Kotlin 实现），
+// ERROR_OUT_OF_MEMORY(-2) = 写回失败
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
@@ -51,6 +53,15 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
     packages_per_box: jint,
     out: jdoubleArray,
 ) -> jint {
+    // 卫语句：非有限输入直接返回 ERROR_INVALID_ARGS，与 Kotlin 侧 sanitize 一致
+    //（Kotlin 侧已先拦截，此处防未来直调 JNI 的调用方违约）。
+    if !sample_weight_gram.is_finite()
+        || !material_cost.is_finite()
+        || !processing_cost.is_finite()
+        || !weight_per_box_gram.is_finite()
+    {
+        return ERROR_INVALID_ARGS;
+    }
     let result = CostCalculator::calculate(
         sample_weight_gram,
         material_cost,
@@ -91,7 +102,7 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calculate(
 //
 // previousTonCost <= 0 表示没有上一批次
 // out 数组 3 个元素: [差异百分比, 差异金额, 是否上涨(1.0/0.0)]
-// 返回 0 = 成功计算，1 = 无上一批次可对比，2 = out 数组无效
+// 返回 OK(0) = 成功计算，1 = 无上一批次可对比，ERROR_INVALID_ARGS(2) = out 数组无效
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calcDifferential(
@@ -139,6 +150,8 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_calcDifferentia
 
 // ──────────────────────────────────────────────
 // Kotlin: external fun round2(value: Double): Double
+// half-away 实现；与 Kotlin 在负数 -x.xx5 差 1 分钱，成本域非负钳零故无影响。
+// 注：Kotlin 侧 round2 已常驻 Kotlin 实现，此 JNI 仅保留供诊断/兼容。
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_round2(
@@ -163,12 +176,16 @@ pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_unitPriceToTota
     unit_price: jdouble,
     is_per_gram: jboolean,
 ) -> jdouble {
+    // 卫语句：非有限输入返回 0.0，与 Kotlin 侧先拦截行为一致。
+    if !weight_gram.is_finite() || !unit_price.is_finite() {
+        return 0.0;
+    }
     CostCalculator::unit_price_to_total(weight_gram, unit_price, is_per_gram != 0)
 }
 
 // ──────────────────────────────────────────────
-// Kotlin: external fun engineInfo(): String
-// 返回引擎描述（用于诊断）
+// Kotlin: external fun engineInfo(): String?
+// 返回引擎描述（用于诊断）；建串失败返回 null，Kotlin 侧需 ?: "" 处理
 // ──────────────────────────────────────────────
 #[no_mangle]
 pub extern "system" fn Java_com_example_shisuan_core_ShisuanCore_engineInfo(
