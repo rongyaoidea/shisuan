@@ -1,7 +1,6 @@
 package com.example.shisuan.data.database
 
 import androidx.room.Entity
-import androidx.room.Ignore
 import androidx.room.PrimaryKey
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -89,9 +88,9 @@ data class BatchRecord(
     /**
      * 加工费合计（元）。
      * 由分项求和得出而非单独存储，避免出现「分项改了、合计没改」的不一致。
-     * @Ignore：纯计算属性，不持久化；伴生对象 create 等不受影响。
+     * 注意：无 backing field 的纯计算属性，Room 只处理字段故自动忽略，
+     * 不可加 @Ignore（该注解不适用于无 backing field 的属性，会编译失败）。
      */
-    @Ignore
     val processingCost: Double
         get() = packagingCost + laborCost + overheadCost
 }

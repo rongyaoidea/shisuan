@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 11
-        versionName = "1.9.0"
+        versionName = "1.9.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Rust .so 按 ABI 分包：只打包真机常用 ABI，减小 APK 体积；

@@ -54,14 +54,17 @@ class OcrAnalyzer(private val context: Context) : Closeable {
             }
         }
 
-    /** 将 GMS Task 转为挂起函数 */
+    /**
+     * 将 GMS Task 转为挂起函数。
+     *
+     * 注意：com.google.android.gms.tasks.Task 没有 cancel() 方法，
+     * 协程取消时只能不再恢复协程（isActive 守卫），底层的离线识别会自行跑完，
+     * 其结果因协程已取消而被丢弃，不会回写 UI。
+     */
     private suspend fun <T> Task<T>.await(): T =
         suspendCancellableCoroutine { cont ->
-            val task = this@await
-            // 协程取消时同步取消底层 GMS Task，避免后台识别继续占用模型线程
-            cont.invokeOnCancellation { task.cancel() }
-            addOnSuccessListener { cont.resume(it) }
-            addOnFailureListener { cont.resumeWithException(it) }
+            addOnSuccessListener { if (cont.isActive) cont.resume(it) }
+            addOnFailureListener { if (cont.isActive) cont.resumeWithException(it) }
         }
 
     /** 释放 ML Kit recognizer 的原生资源（Hilt Singleton 常驻，进程退出/测试时调用） */
