@@ -15,6 +15,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # secrets 不能直接用于 if 条件，先落到作业级 env 再判断
+    env:
+      KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,7 +38,7 @@ jobs:
 
       # workflow_dispatch 且未配置密钥时跳过，后续构建产出未签名 APK
       - name: Decode release keystore
-        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+        if: env.KEYSTORE_B64 != ''
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"

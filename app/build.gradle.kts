@@ -110,6 +110,16 @@ android {
     }
 }
 
+// app/schemas 作为 debug 资产源目录：KSP 在编译期导出 schema JSON，
+// MigrationTestHelper 从资产读取当前版本 schema。必须保证 mergeDebugAssets
+// 晚于 kspDebugKotlin，否则当前版本的 schema 尚未提交到仓库时（干净检出 CI）
+// 资产里会缺文件，迁移测试报 FileNotFoundException。
+afterEvaluate {
+    tasks.matching { it.name == "mergeDebugAssets" }.configureEach {
+        dependsOn("kspDebugKotlin")
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
