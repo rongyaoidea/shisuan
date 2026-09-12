@@ -9,8 +9,7 @@ import javax.inject.Inject
  * 批次成本计算用例：CostCalculator.calculate 的薄委托层。
  *
  * VM 保留原调用语义，仅把 JNI/回退细节收敛到此，供单测直接覆盖公式分支。
- * // TODO: 下一步迁移到 UseCase —— 将 ProductDetailViewModel 内联的
- * // materialCost sumOf + suggestedTonPrice/differential 也收拢到此。
+ * 差异对比与建议售价在 VM 侧按需组合（依赖相邻批次，不适合收进单批次用例）。
  */
 class CalculateBatchCostUseCase @Inject constructor() {
     operator fun invoke(

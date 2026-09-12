@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.shisuan.data.database.CostCalDatabase
@@ -92,13 +94,17 @@ class BackupManager @Inject constructor(
                 File("$dbPath-wal").delete()
                 File("$dbPath-shm").delete()
                 if (!staging.renameTo(File(dbPath))) {
-                    // 回滚：把替换前的 .bak 拷回主库位置，再抛错说明已回滚
+                    // 回滚：把替换前的 .bak 拷回主库位置。
+                    // 主库连接已关闭，继续运行会让 Room 持有已关闭的连接，
+                    // 因此回滚后立即重启（数据与恢复前一致），再抛错仅作兜底。
                     runCatching {
                         rollbackBackup.copyTo(File(dbPath), overwrite = true)
                     }
+                    restartApp()
                     throw IOException("恢复数据失败，已回滚到恢复前的数据，请重试")
                 }
-                require(File(dbPath).length() > 0) { "恢复数据失败，请重试" }
+                // 注：staging 已在 validateBackup 通过魔数 + integrity_check 校验，
+                // 此处不再重复检查文件长度（避免关库后再抛错导致连接未重建）。
                 // 成功后删除回滚备份
                 rollbackBackup.delete()
 
@@ -146,13 +152,25 @@ class BackupManager @Inject constructor(
         }
     }
 
-    /** 重启应用进程：先拉起启动页，再结束当前进程 */
+    /**
+     * 重启应用进程：先拉起启动页，延迟片刻再结束当前进程。
+     *
+     * 原实现 startActivity 后立即 killProcess，部分 ROM 上来不及拉起新进程，
+     * 表现为「恢复成功后应用直接退出且不再启动」。这里留出系统调度时间。
+     */
     private fun restartApp() {
         val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         if (launchIntent != null) context.startActivity(launchIntent)
-        Process.killProcess(Process.myPid())
-        // killProcess 后理论不可达；兜底确保进程退出
-        Runtime.getRuntime().exit(0)
+        Handler(Looper.getMainLooper()).postDelayed({
+            Process.killProcess(Process.myPid())
+            // killProcess 后理论不可达；兜底确保进程退出
+            Runtime.getRuntime().exit(0)
+        }, RESTART_DELAY_MS)
+    }
+
+    companion object {
+        /** 重启前留出系统拉起启动页的时间（毫秒） */
+        private const val RESTART_DELAY_MS = 800L
     }
 }

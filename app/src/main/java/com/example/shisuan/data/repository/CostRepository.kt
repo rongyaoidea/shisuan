@@ -34,6 +34,9 @@ interface CostRepository {
 
     fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>>
 
+    /** 只取批次名一列（批次号生成用，避免拉取全量批次对象） */
+    suspend fun getBatchNames(productId: Long): List<String>
+
     /**
      * 一次取回批次及其配料明细（单查询替代 N 次配料查询，避免 N+1 放大）
      */
@@ -70,6 +73,9 @@ interface CostRepository {
     val allIngredientsWithUseCount: Flow<List<IngredientWithUseCount>>
 
     suspend fun getIngredientById(id: Long): Ingredient?
+
+    /** 按名称+品牌查活跃原料；配料库重命名/改品牌前用它查重，避免撞唯一索引 */
+    suspend fun findIngredientByNameAndBrand(name: String, brand: String): Ingredient?
 
     suspend fun saveIngredient(ingredient: Ingredient): Long
 
@@ -142,6 +148,9 @@ class RoomCostRepository @Inject constructor(
 
     override fun getBatchesByProduct(productId: Long): Flow<List<BatchRecord>> =
         db.batchDao().getByProduct(productId)
+
+    override suspend fun getBatchNames(productId: Long): List<String> =
+        db.batchDao().getBatchNamesOnce(productId)
 
     /**
      * 一次取回批次及其配料明细（单查询替代 N 次配料查询，避免 N+1 放大）
@@ -299,6 +308,9 @@ class RoomCostRepository @Inject constructor(
 
     override suspend fun getIngredientById(id: Long): Ingredient? =
         db.ingredientDao().getById(id)
+
+    override suspend fun findIngredientByNameAndBrand(name: String, brand: String): Ingredient? =
+        db.ingredientDao().getByNameAndBrand(name, brand)
 
     override suspend fun saveIngredient(ingredient: Ingredient): Long =
         db.ingredientDao().insert(ingredient)

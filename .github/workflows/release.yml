@@ -28,7 +28,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # 先跑测试再构建发布包：失败即中止，不浪费一次 release 构建
+      # （含 Robolectric 迁移测试），失败则不发版
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      # workflow_dispatch 且未配置密钥时跳过，后续构建产出未签名 APK
       - name: Decode release keystore
+        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
@@ -40,10 +47,6 @@ jobs:
           SHISUAN_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           SHISUAN_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           SHISUAN_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-
-      # 顺手跑一遍 JVM 单测（含 Robolectric 迁移测试），失败则不发版
-      - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

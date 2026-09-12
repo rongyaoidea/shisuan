@@ -38,10 +38,20 @@ class IngredientLibraryViewModel @Inject constructor(
         name: String, brand: String, category: String, unitPricePerKg: Double
     ) {
         launchSafe {
+            val targetName = name.trim()
+            val targetBrand = brand.trim()
+            // 改名/改品牌可能撞上 (name, supplier) 唯一索引：先查重给出明确提示，
+            // 而不是让 DB 层抛出笼统的「数据冲突」。
+            val duplicate = repo.findIngredientByNameAndBrand(targetName, targetBrand)
+            if (duplicate != null && duplicate.id != ingredient.id) {
+                val label = if (targetBrand.isEmpty()) targetName else "$targetName（$targetBrand）"
+                showError("配料库中已存在「$label」，请直接编辑该条或修改品牌")
+                return@launchSafe
+            }
             repo.updateIngredient(
                 ingredient.copy(
-                    name = name.trim(),
-                    supplier = brand.trim(),
+                    name = targetName,
+                    supplier = targetBrand,
                     category = category,
                     unitPrice = unitPricePerKg,
                     updatedAt = System.currentTimeMillis()

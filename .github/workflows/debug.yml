@@ -1,0 +1,75 @@
+name: Debug Build
+
+# 调试构建流水线：
+#   - 推送 main 且改动涉及源码/构建/资源时自动构建并发布 debug 预发布包
+#   - 仅改 app/schemas、docs、Markdown 的提交不触发（schema 由本流水线产出后回填仓库）
+#   - 支持手动 workflow_dispatch
+#
+# 产物：
+#   1. actions artifact: shisuan-debug（APK）与 room-schemas（KSP 导出的 schema 基线）
+#   2. GitHub 预发布 debug-latest：滚动更新，始终指向最新一次 main 构建的 debug APK
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'app/schemas/**'
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 串行化，避免两次构建同时覆盖 debug-latest 的产物
+concurrency:
+  group: debug-build
+  cancel-in-progress: false
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # 测试门禁：JVM 单测 + Robolectric 迁移测试，失败则不产出 debug 包
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: shisuan-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      # KSP 在构建时导出 app/schemas/*.json；上传供人工回填仓库（迁移基线）
+      - name: Upload generated Room schemas
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas
+          path: app/schemas/
+
+      - name: Publish debug prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-latest
+          name: debug-latest（滚动调试构建）
+          body: |
+            由 main 分支最新提交自动构建的 debug 包（debug 签名，仅供测试安装）。
+            提交：${{ github.sha }}
+          prerelease: true
+          files: app/build/outputs/apk/debug/app-debug.apk
+          overwrite_files: true

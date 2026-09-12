@@ -18,8 +18,9 @@
 -keep @androidx.room.Entity class * { *; }
 -dontwarn androidx.room.paging.**
 
-# 实体字段：批次快照（BatchSnapshot.snapshotData）以 JSON 文本持久化历史版本，
-# 字段名被混淆后旧快照将无法解析，这里保留 data.database 下所有字段名。
+# 实体字段名保留：与快照格式无关（快照是行式文本，见 BatchSnapshotCodec），
+# Room/KSP 生成的列名与访问代码均在编译期确定。此规则为防御性保留：
+# 避免未来引入反射式序列化/调试工具时字段名被混淆，保证导出的明文库可读。
 -keepclassmembers class com.example.shisuan.data.database.** {
     <fields>;
 }

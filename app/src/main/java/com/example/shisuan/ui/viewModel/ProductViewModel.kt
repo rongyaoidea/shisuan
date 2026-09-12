@@ -67,7 +67,6 @@ class ProductViewModel @Inject constructor(
 @HiltViewModel
 class ProductDetailViewModel @Inject constructor(
     private val repo: CostRepository,
-    // TODO: 下一步迁移到 UseCase —— 成本/差异/报价收拢到 CalculateBatchCostUseCase
     private val calculateBatchCostUseCase: CalculateBatchCostUseCase
 ) : BaseViewModel() {
 
@@ -109,7 +108,7 @@ class ProductDetailViewModel @Inject constructor(
                         row.ingredients.sumOf { it.totalCost }
                     }
                     val results = rows.mapIndexed { index, row ->
-                        // TODO: 下一步迁移到 UseCase —— 此处已委托，待把 sumOf 也收拢进 UseCase
+                        // 成本计算委托 UseCase；materialCost 汇总留在 VM，避免为纯求和多一层间接
                         calculateBatchCostUseCase(
                             batch = row.batch,
                             materialCost = materialCosts[index],
@@ -287,7 +286,6 @@ class ProductDetailViewModel @Inject constructor(
 class NewBatchViewModel @Inject constructor(
     private val repo: CostRepository,
     private val ocrAnalyzer: OcrAnalyzer,
-    // TODO: 下一步迁移到 UseCase —— 批次名生成已委托，保存重试仍保留在 VM
     private val generateBatchNameUseCase: GenerateBatchNameUseCase,
     private val clock: Clock
 ) : BaseViewModel() {
@@ -497,7 +495,7 @@ class NewBatchViewModel @Inject constructor(
         _saving.value = true
         viewModelScope.launch {
             val ok = try {
-                // TODO: 下一步迁移到 UseCase —— 命名已委托给 GenerateBatchNameUseCase
+                // 命名委托 GenerateBatchNameUseCase；并发冲突由唯一索引兜底后重试一次
                 var batchName = generateBatchName(productId, batchDate)
                 try {
                     repo.saveBatchWithIngredients(draft.copy(batchName = batchName), ingredientsSnapshot)
@@ -534,8 +532,7 @@ class NewBatchViewModel @Inject constructor(
     /**
      * 生成批次名：日期 + 序号（如 2026-09-03-01）
      * 序号 = 该产品同一日期下已有批次的最大序号 + 1。
-     * // TODO: 下一步迁移到 UseCase —— 已委托给 GenerateBatchNameUseCase，
-     * // 此处保留薄包装以兼容旧调用方，规则变更只改 UseCase。
+     * 规则实现在 GenerateBatchNameUseCase，此处仅保留薄包装供本类复用。
      */
     private suspend fun generateBatchName(productId: Long, date: String): String =
         generateBatchNameUseCase(productId, date)

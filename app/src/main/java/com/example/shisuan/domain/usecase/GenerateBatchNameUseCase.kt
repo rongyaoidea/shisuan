@@ -1,7 +1,6 @@
 package com.example.shisuan.domain.usecase
 
 import com.example.shisuan.data.repository.CostRepository
-import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 /**
@@ -9,17 +8,15 @@ import javax.inject.Inject
  *
  * 并发兜底不在此：VM 保存时捕获 SQLiteConstraintException 后 maxSeq+1 重试 1 次，
  * 依赖 (productId, batchName) 唯一索引（v9 迁移）做最终仲裁。
- * // TODO: 下一步迁移到 UseCase —— VM 内的 generateBatchName 仅保留委托，
- * // 命名规则变更只改此处。
+ * 命名规则变更只需改此处。
  */
 class GenerateBatchNameUseCase @Inject constructor(
     private val repo: CostRepository
 ) {
     suspend operator fun invoke(productId: Long, date: String): String {
         val prefix = "$date-"
-        val batches = repo.getBatchesByProduct(productId).first()
-        val maxSeq = batches.asSequence()
-            .map { it.batchName }
+        // 直查批次名一列：生成序号无需读取全量批次对象
+        val maxSeq = repo.getBatchNames(productId).asSequence()
             .filter { it.startsWith(prefix) }
             .mapNotNull { it.removePrefix(prefix).toIntOrNull() }
             .maxOrNull() ?: 0

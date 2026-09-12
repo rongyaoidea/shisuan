@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 及以下的系统自动备份规则。
+  本应用数据只存本机，系统云备份是手机丢失/换机时的额外兜底；
+  这里显式声明只备份业务数据库与偏好设置，排除缓存、OCR 临时图片等可重建内容。
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+</full-backup-content>

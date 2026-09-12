@@ -109,8 +109,7 @@ interface BatchDao {
     fun getByProduct(productId: Long): Flow<List<BatchRecord>>
 
     /**
-     * TODO：批次名生成（generateBatchName）目前经 getBatchesByProduct(...).first()
-     * 全量取回批次再算最大序号；高频调用时可改用本 suspend 直查减少 IO。
+     * 批次名生成专用直查：只取批次名一列而非全量批次对象，减少生成序号时的 IO。
      * 并发插入冲突由 (productId, batchName) 唯一索引兜底，调用方（VM 层）捕获
      * SQLiteConstraintException 后重试一次即可。
      */
