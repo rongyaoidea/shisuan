@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.Flow
  *     删除自始至终无 UI 入口的 batch_problem 表
  * v10: ingredient 增加 (name, supplier) 唯一索引（配料库去重键的 DB 层兜底，需重建表）；
  *     batch_ingredient 增加 (ingredientName, ingredientSupplier) 复合索引（覆盖使用频次统计）
+ * v11: batch_result 移除废弃的 yieldRate 列（v7 起由 BatchRecord.yieldRatePercent 取代，
+ *     避免两个出品率字段并存造成误读）
  */
 @Database(
     entities = [
@@ -30,7 +32,7 @@ import kotlinx.coroutines.flow.Flow
         BatchSnapshot::class,
         OperationLog::class
     ],
-    version = 10,
+    version = 11,
     // 导出 schema 以支持迁移测试：schema JSON 位于 app/schemas/
     exportSchema = true
 )
@@ -45,7 +47,7 @@ abstract class CostCalDatabase : RoomDatabase() {
 
     companion object {
         /** 当前应用支持的 schema 版本；恢复备份时用于拒绝来自更高版本的文件 */
-        const val SUPPORTED_DB_VERSION = 10
+        const val SUPPORTED_DB_VERSION = 11
 
         @Volatile private var INSTANCE: CostCalDatabase? = null
         fun getInstance(context: android.content.Context): CostCalDatabase {
@@ -58,7 +60,8 @@ abstract class CostCalDatabase : RoomDatabase() {
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
                     MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_10_11
                 )
                 .build().also { INSTANCE = it }
             }
@@ -556,6 +559,56 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         database.execSQL(
             "CREATE INDEX IF NOT EXISTS index_batch_ingredient_ingredientName_ingredientSupplier " +
                 "ON batch_ingredient(ingredientName, ingredientSupplier)"
+        )
+    }
+}
+
+/**
+ * 数据库迁移：v10 → v11
+ *
+ * batch_result 移除废弃的 yieldRate 列 —— 该字段自 v7 引入
+ * BatchRecord.yieldRatePercent 后不再被读写，两处「出品率」并存容易误读。
+ *
+ * SQLite 删列需 3.35+（Android 14 起），minSdk 26 不能依赖 DROP COLUMN，
+ * 采用「建新表-拷贝-删旧表-重命名」模式，并重建 batchId 索引（Room 校验 schema 用）。
+ * 外键与事务语义由 Room 迁移框架统一处理，此处不手动开关 foreign_keys。
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // 1. 建新表（与 v11 BatchResult 实体声明一致，不含 yieldRate）
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS batch_result_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                batchId INTEGER NOT NULL,
+                texture TEXT,
+                color TEXT,
+                aroma TEXT,
+                taste TEXT,
+                appearance TEXT,
+                pHValue REAL,
+                brixDegree REAL,
+                packagingResult TEXT,
+                overallRating INTEGER,
+                recordedAt INTEGER NOT NULL,
+                FOREIGN KEY(batchId) REFERENCES batch_record(id) ON DELETE CASCADE
+            )
+        """.trimIndent())
+        // 2. 拷贝数据（yieldRate 直接丢弃，其余字段原样保留）
+        database.execSQL("""
+            INSERT INTO batch_result_new (
+                id, batchId, texture, color, aroma, taste, appearance,
+                pHValue, brixDegree, packagingResult, overallRating, recordedAt
+            )
+            SELECT
+                id, batchId, texture, color, aroma, taste, appearance,
+                pHValue, brixDegree, packagingResult, overallRating, recordedAt
+            FROM batch_result
+        """.trimIndent())
+        // 3. 删旧表、重命名、重建索引
+        database.execSQL("DROP TABLE batch_result")
+        database.execSQL("ALTER TABLE batch_result_new RENAME TO batch_result")
+        database.execSQL(
+            "CREATE INDEX IF NOT EXISTS index_batch_result_batchId ON batch_result(batchId)"
         )
     }
 }

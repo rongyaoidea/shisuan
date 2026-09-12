@@ -202,7 +202,6 @@ data class BatchResult(
     val appearance: String? = null,
     val pHValue: Double? = null,
     val brixDegree: Double? = null,
-    val yieldRate: Double? = null,
     val packagingResult: String? = null,
     val overallRating: Int? = null,
     val recordedAt: Long = System.currentTimeMillis()

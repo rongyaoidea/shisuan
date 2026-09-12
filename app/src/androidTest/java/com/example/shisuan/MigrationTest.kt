@@ -4,6 +4,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.shisuan.data.database.CostCalDatabase
+import com.example.shisuan.data.database.MIGRATION_10_11
 import com.example.shisuan.data.database.MIGRATION_6_7
 import com.example.shisuan.data.database.MIGRATION_7_8
 import com.example.shisuan.data.database.MIGRATION_8_9
@@ -19,7 +20,7 @@ import java.io.IOException
 /**
  * Room 迁移测试（需在设备/模拟器上运行：connectedDebugAndroidTest）
  *
- * 覆盖 v6→v7 / v7→v8 / v8→v9 / v9→v10。
+ * 覆盖 v6→v7 / v7→v8 / v8→v9 / v9→v10 / v10→v11。
  * 说明：早期迁移（v1→v6）开发时未开启 schema 导出，缺少历史 JSON 基线，
  * 暂无法在此框架下验证；自 v7 起每个新迁移都必须补充对应测试。
  * 注意：v9 迁移测试需要先执行一次构建，让 KSP 导出 app/schemas/9.json 后才能通过。
@@ -206,6 +207,51 @@ class MigrationTest {
         ).use { c ->
             assertTrue(c.moveToFirst())
             assertEquals(2, c.getInt(0))
+        }
+        db.close()
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun `migrate 10 to 11 - batch_result 移除废弃 yieldRate 且数据保留`() {
+        // 1. 按 v10 schema 建库：batch_result 仍含废弃的 yieldRate 列
+        var db = helper.createDatabase(TEST_DB, 10)
+        db.execSQL(
+            "INSERT INTO product (name, category, description, isActive, " +
+                "weightPerBoxGram, packagesPerBox, weightPerPackageGram, targetMarginRate, createdAt, updatedAt) " +
+                "VALUES ('草莓酱', '果酱', '', 1, 5000.0, 20, 250.0, 0.0, 0, 0)"
+        )
+        db.execSQL(
+            "INSERT INTO batch_record (productId, batchName, sampleWeightGram, " +
+                "packagingCost, laborCost, overheadCost, note, createdAt, updatedAt) " +
+                "VALUES (1, '2026-09-03-01', 1000.0, 0, 0, 0, '', 0, 0)"
+        )
+        db.execSQL(
+            "INSERT INTO batch_result (batchId, texture, color, aroma, taste, appearance, " +
+                "pHValue, brixDegree, yieldRate, packagingResult, overallRating, recordedAt) " +
+                "VALUES (1, '细腻', '正常', NULL, NULL, NULL, 3.5, 45.0, 85.0, NULL, 4, 0)"
+        )
+        db.close()
+
+        // 2. 执行 v10 → v11 迁移并校验 schema
+        db = helper.runMigrationsAndValidate(TEST_DB, 11, true, MIGRATION_10_11)
+
+        // 3. yieldRate 之外的成果数据原样保留
+        db.query(
+            "SELECT texture, pHValue, brixDegree, overallRating FROM batch_result"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("细腻", c.getString(0))
+            assertEquals(3.5, c.getDouble(1), 0.0)
+            assertEquals(45.0, c.getDouble(2), 0.0)
+            assertEquals(4, c.getInt(3))
+        }
+
+        // 4. 新表不再有 yieldRate 列
+        db.query("PRAGMA table_info(batch_result)").use { c ->
+            val columns = mutableListOf<String>()
+            while (c.moveToNext()) columns.add(c.getString(1))
+            assertTrue("yieldRate" !in columns)
         }
         db.close()
     }
