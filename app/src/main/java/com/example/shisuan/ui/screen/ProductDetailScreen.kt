@@ -38,6 +38,7 @@ import com.example.shisuan.ui.viewModel.ProductDetailViewModel
 import com.example.shisuan.ui.viewModel.YieldAnalysis
 import com.example.shisuan.utils.BatchSnapshotCodec
 import com.example.shisuan.utils.WeightFormatter
+import com.example.shisuan.utils.groupByBatchMonth
 import com.example.shisuan.utils.countSnapshotIngredients
 import com.example.shisuan.utils.formatSnapshotLabel
 import java.util.Locale
@@ -67,6 +68,10 @@ fun ProductDetailScreen(
     val batchResult by viewModel.batchResult.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<BatchWithCostUI?>(null) }
     var pendingRestore by remember { mutableStateOf<BatchSnapshot?>(null) }
+    // 批次搜索：匹配批次号 / 备注 / 原料名 / 品牌
+    var batchQuery by remember { mutableStateOf("") }
+    // 月份折叠：null = 未手动操作（默认只展开最新一月）；点表头后转为显式集合
+    var expandedMonths: Set<String>? by remember(productId) { mutableStateOf(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(errorMessage) {
@@ -84,6 +89,30 @@ fun ProductDetailScreen(
     val costTrendData = remember(batchesWithCost) {
         batchesWithCost.reversed()
             .map { it.batch.batchName to it.result.unitCostPerTon }
+    }
+
+    // 批次搜索过滤（批次号/备注/原料名/品牌，忽略大小写）
+    val filteredBatches = remember(batchesWithCost, batchQuery) {
+        val q = batchQuery.trim()
+        if (q.isEmpty()) batchesWithCost
+        else batchesWithCost.filter { row ->
+            row.batch.batchName.contains(q, ignoreCase = true) ||
+                row.batch.note.contains(q, ignoreCase = true) ||
+                row.ingredients.any {
+                    it.ingredientName.contains(q, ignoreCase = true) ||
+                        it.ingredientSupplier.contains(q, ignoreCase = true)
+                }
+        }
+    }
+    // 按月分组（输入已是 createdAt DESC，组序由新到旧）
+    val monthGroups = remember(filteredBatches) {
+        groupByBatchMonth(filteredBatches) { it.batch.batchName }
+    }
+    // 搜索时全展开（结果默认可见）；平时默认只展开最新一月
+    val effectiveExpanded: Set<String> = if (batchQuery.isBlank()) {
+        expandedMonths ?: setOfNotNull(monthGroups.firstOrNull()?.key)
+    } else {
+        monthGroups.map { it.key }.toSet()
     }
 
     Scaffold(
@@ -178,16 +207,56 @@ fun ProductDetailScreen(
                     EmptyState(Jar, "还没有批次，点 ＋ 新建第一个批次")
                 }
             } else {
-                itemsIndexed(batchesWithCost, key = { _, b -> b.batch.id }) { index, item ->
-                    BatchCard(
-                        item = item,
-                        index = index,
-                        onEdit = { onNavigateToEditBatch(item.batch.productId, item.batch.id) },
-                        onDelete = { pendingDelete = item },
-                        onCopy = { onNavigateToCopyBatch(item.batch.productId, item.batch.id) },
-                        onShowHistory = { viewModel.showHistory(item.batch.id) },
-                        onShowOutcome = { viewModel.showOutcome(item.batch.id) }
+                item(key = "batch-search") {
+                    OutlinedTextField(
+                        value = batchQuery,
+                        onValueChange = { batchQuery = it },
+                        placeholder = { Text("搜索批次号 / 备注 / 原料…") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        trailingIcon = {
+                            if (batchQuery.isNotEmpty()) {
+                                TextButton(onClick = { batchQuery = "" }) {
+                                    Text("清除", fontSize = 12.sp)
+                                }
+                            }
+                        }
                     )
+                }
+                if (filteredBatches.isEmpty()) {
+                    item(key = "no-match") {
+                        EmptyState(Jar, "没有匹配的批次，换个关键词试试")
+                    }
+                } else {
+                    monthGroups.forEach { group ->
+                        stickyHeader(key = "month-${group.key}") {
+                            MonthHeader(
+                                label = group.label,
+                                count = group.items.size,
+                                expanded = group.key in effectiveExpanded,
+                                onToggle = {
+                                    val cur = effectiveExpanded
+                                    expandedMonths =
+                                        if (group.key in cur) cur - group.key else cur + group.key
+                                }
+                            )
+                        }
+                        if (group.key in effectiveExpanded) {
+                            itemsIndexed(group.items, key = { _, b -> b.batch.id }) { index, item ->
+                                BatchCard(
+                                    item = item,
+                                    index = index,
+                                    onEdit = { onNavigateToEditBatch(item.batch.productId, item.batch.id) },
+                                    onDelete = { pendingDelete = item },
+                                    onCopy = { onNavigateToCopyBatch(item.batch.productId, item.batch.id) },
+                                    onShowHistory = { viewModel.showHistory(item.batch.id) },
+                                    onShowOutcome = { viewModel.showOutcome(item.batch.id) }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -397,6 +466,40 @@ fun TemplateShortcutCard(latestBatchName: String, onClick: () -> Unit) {
 }
 
 /**
+ * 月份分组吸顶表头：点击折叠/展开该月批次。
+ * 自带页面背景色，避免吸顶滚动时透出下方卡片。
+ */
+@Composable
+private fun MonthHeader(
+    label: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "$label · $count 批",
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            color = Ink
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            if (expanded) "收起" else "展开",
+            fontSize = 12.sp,
+            color = Rausch
+        )
+    }
+}
+
+/**
  * 批次卡片 - 显示成本计算结果 + 展开配料占比 + 编辑/复制/删除操作
  */
 @Composable
@@ -477,27 +580,20 @@ fun BatchCard(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            // 成本三列
+            // 折叠态只留核心：吨价 + 建议出厂价；箱价/包价与成本构成收进展开区
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                CostCell("吨价", "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}")
-                CostCell("箱价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerBox)}")
-                CostCell("包价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerPackage)}")
-            }
-            // 总成本构成与建议售价
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+                Text("吨价", fontSize = 11.sp, color = Foggy)
+                Spacer(Modifier.width(6.dp))
                 Text(
-                    "原料 ¥%,.2f + 加工 ¥%,.2f = ¥%,.2f"
-                        .format(Locale.CHINA, item.materialCost, item.processingCost, item.totalCost),
-                    fontSize = 12.sp,
-                    color = Foggy
+                    "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Ink
                 )
+                Spacer(Modifier.weight(1f))
                 item.suggestedTonPrice?.let { price ->
                     Text(
                         "建议出厂价 ¥%,.0f/吨".format(Locale.CHINA, price),
@@ -507,8 +603,24 @@ fun BatchCard(
                     )
                 }
             }
-            // 展开：出品率与配料成本占比
+            // 展开：箱价/包价 + 成本构成 + 出品率与配料成本占比
             if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    CostCell("吨价", "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}")
+                    CostCell("箱价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerBox)}")
+                    CostCell("包价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerPackage)}")
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "原料 ¥%,.2f + 加工 ¥%,.2f = ¥%,.2f"
+                        .format(Locale.CHINA, item.materialCost, item.processingCost, item.totalCost),
+                    fontSize = 12.sp,
+                    color = Foggy
+                )
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                 Spacer(Modifier.height(8.dp))

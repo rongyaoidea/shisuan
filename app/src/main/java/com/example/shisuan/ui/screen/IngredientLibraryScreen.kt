@@ -44,6 +44,8 @@ fun IngredientLibraryScreen(
     var editing by remember { mutableStateOf<Ingredient?>(null) }
     var editingUseCount by remember { mutableStateOf(0) }
     var pendingDelete by remember { mutableStateOf<Ingredient?>(null) }
+    // 分类筛选：选项来自已有数据的分类，切换后离开页面即重置
+    var categoryFilter by remember { mutableStateOf("全部") }
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(errorMessage) {
@@ -77,15 +79,38 @@ fun IngredientLibraryScreen(
             }
         }
     ) { padding ->
+        // 分类选项与过滤结果：派生自数据，分类消失时回落到全部
+        val categories = remember(ingredients) {
+            listOf("全部") + ingredients.map { it.ingredient.category }
+                .filter { it.isNotEmpty() }.distinct().sorted()
+        }
+        val effectiveFilter = categoryFilter.takeIf { it in categories } ?: "全部"
+        val visibleIngredients = remember(ingredients, effectiveFilter) {
+            if (effectiveFilter == "全部") ingredients
+            else ingredients.filter { it.ingredient.category == effectiveFilter }
+        }
         if (ingredients.isEmpty()) {
             EmptyState(Flask, "配料库为空，点 ＋ 添加第一种原料")
+        } else if (visibleIngredients.isEmpty()) {
+            EmptyState(Flask, "该分类下暂无原料")
         } else {
             LazyColumn(
                 modifier = Modifier.padding(padding),
                 contentPadding = PaddingValues(bottom = 80.dp, top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(ingredients, key = { it.ingredient.id }) { row ->
+                // 仅多于「全部」一个选项时展示筛选行
+                if (categories.size > 1) {
+                    item(key = "category-filter") {
+                        TextChipsRow(
+                            options = categories,
+                            current = effectiveFilter,
+                            onPick = { categoryFilter = it.ifEmpty { "全部" } },
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
+                items(visibleIngredients, key = { it.ingredient.id }) { row ->
                     val ingredient = row.ingredient
                     Card(
                         modifier = Modifier

@@ -59,6 +59,8 @@ fun ProductListScreen(
     var showBackupDialog by remember { mutableStateOf(false) }
     var pendingImport by remember { mutableStateOf(false) } // 二次确认导入
     var pendingDeleteProduct by remember { mutableStateOf<Product?>(null) } // 长按删除确认
+    // 产品搜索：匹配名称 / 分类 / 备注
+    var productQuery by remember { mutableStateOf("") }
 
     // 备份操作提示（成功与失败共用）
     val backupMessage by backupViewModel.message.collectAsStateWithLifecycle()
@@ -121,6 +123,16 @@ fun ProductListScreen(
             }
         }
     ) { padding ->
+        // 搜索过滤（名称/分类/备注，忽略大小写与首尾空格）
+        val filteredProducts = remember(products, productQuery) {
+            val q = productQuery.trim()
+            if (q.isEmpty()) products
+            else products.filter {
+                it.name.contains(q, ignoreCase = true) ||
+                    it.category.contains(q, ignoreCase = true) ||
+                    it.description.contains(q, ignoreCase = true)
+            }
+        }
         if (products.isEmpty()) {
             EmptyState(Package, "还没有产品，点 ＋ 开始添加")
         } else {
@@ -129,13 +141,37 @@ fun ProductListScreen(
                 contentPadding = PaddingValues(bottom = 80.dp, top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                itemsIndexed(products, key = { _, p -> p.id }) { index, product ->
-                    ProductCard(
-                        product = product,
-                        onClick = { onNavigateToDetail(product.id) },
-                        onLongClick = { pendingDeleteProduct = product },
-                        index = index
+                item(key = "product-search") {
+                    OutlinedTextField(
+                        value = productQuery,
+                        onValueChange = { productQuery = it },
+                        placeholder = { Text("搜索产品名称 / 分类…") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        trailingIcon = {
+                            if (productQuery.isNotEmpty()) {
+                                TextButton(onClick = { productQuery = "" }) {
+                                    Text("清除", fontSize = 12.sp)
+                                }
+                            }
+                        }
                     )
+                }
+                if (filteredProducts.isEmpty()) {
+                    item(key = "no-match") {
+                        EmptyState(Package, "没有匹配的产品，换个关键词试试")
+                    }
+                } else {
+                    itemsIndexed(filteredProducts, key = { _, p -> p.id }) { index, product ->
+                        ProductCard(
+                            product = product,
+                            onClick = { onNavigateToDetail(product.id) },
+                            onLongClick = { pendingDeleteProduct = product },
+                            index = index
+                        )
+                    }
                 }
             }
         }
