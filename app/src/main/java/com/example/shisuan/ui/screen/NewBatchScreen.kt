@@ -26,6 +26,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.BatchIngredient
 import com.example.shisuan.data.database.Ingredient
+import com.example.shisuan.domain.model.PriceDriftDetector
 import com.example.shisuan.ui.components.EmptyState
 import com.example.shisuan.ui.components.QuickChipsRow
 import com.example.shisuan.ui.components.SliderNumberField
@@ -350,6 +351,27 @@ fun NewBatchScreen(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
+
+            // 编辑旧批次且快照价已偏离现价时提示：存档价不会自动跟涨，防误触
+            val editPriceDrifts = remember(ingredients, allIngredients) {
+                if (!isEdit || ingredients.isEmpty() || allIngredients.isEmpty()) emptyList()
+                else PriceDriftDetector.detect(
+                    ingredients,
+                    allIngredients.associate { (it.name to it.supplier) to it }
+                )
+            }
+            if (isEdit && editPriceDrifts.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                val names = editPriceDrifts.take(2).joinToString("、") { it.name } +
+                    if (editPriceDrifts.size > 2) "等 ${editPriceDrifts.size} 项" else ""
+                Text(
+                    "本批次 $names 的单价与原料库现价不一致，保存后仍按本页单价计入；" +
+                        "删掉重选可按现价计入。",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = WarningOrange
+                )
+            }
 
             if (ingredients.isEmpty()) {
                 EmptyState(Flask, "还没有添加原料，点下方按钮添加")

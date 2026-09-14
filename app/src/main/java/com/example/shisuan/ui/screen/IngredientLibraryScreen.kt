@@ -42,6 +42,7 @@ fun IngredientLibraryScreen(
     val errorMessage by viewModel.error.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Ingredient?>(null) }
+    var editingUseCount by remember { mutableStateOf(0) }
     var pendingDelete by remember { mutableStateOf<Ingredient?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -137,7 +138,10 @@ fun IngredientLibraryScreen(
                                     modifier = Modifier.padding(end = 4.dp)
                                 )
                             }
-                            IconButton(onClick = { editing = ingredient }) {
+                            IconButton(onClick = {
+                                editing = ingredient
+                                editingUseCount = row.useCount
+                            }) {
                                 Icon(
                                     Edit, "编辑",
                                     tint = Foggy, modifier = Modifier.size(18.dp)
@@ -174,6 +178,7 @@ fun IngredientLibraryScreen(
         IngredientEditDialog(
             title = "编辑原料",
             initial = ingredient,
+            useCount = editingUseCount,
             onDismiss = { editing = null },
             onSave = { name, brand, category, price ->
                 viewModel.updateIngredient(ingredient, name, brand, category, price)
@@ -212,7 +217,8 @@ private fun IngredientEditDialog(
     title: String,
     initial: Ingredient?,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Double) -> Unit
+    onSave: (String, String, String, Double) -> Unit,
+    useCount: Int = 0
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var brand by remember { mutableStateOf(initial?.supplier ?: "") }
@@ -267,6 +273,15 @@ private fun IngredientEditDialog(
                     suffix = "元/kg",
                     placeholder = "如 12.5"
                 )
+                // 改价影响说明：历史批次保留旧价，断点在产品详情页以「历史价」标出
+                if (initial != null && useCount > 0) {
+                    Text(
+                        "改价仅影响新建批次；已有 $useCount 个批次保留历史价，" +
+                            "产品详情页会标注“历史价”。",
+                        fontSize = 12.sp,
+                        color = Foggy
+                    )
+                }
             }
         },
         confirmButton = {

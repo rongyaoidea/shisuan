@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
@@ -19,6 +20,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.shisuan.data.database.BatchSnapshot
 import com.example.shisuan.data.database.Product
+import com.example.shisuan.domain.model.IngredientDiffKind
+import com.example.shisuan.domain.model.SnapshotDiffer
 import com.example.shisuan.ui.animation.entranceAnimation
 import com.example.shisuan.ui.animation.pressScale
 import com.example.shisuan.ui.components.CostTrendChart
@@ -33,6 +36,7 @@ import com.example.shisuan.ui.theme.*
 import com.example.shisuan.ui.viewModel.BatchWithCostUI
 import com.example.shisuan.ui.viewModel.ProductDetailViewModel
 import com.example.shisuan.ui.viewModel.YieldAnalysis
+import com.example.shisuan.utils.BatchSnapshotCodec
 import com.example.shisuan.utils.WeightFormatter
 import com.example.shisuan.utils.countSnapshotIngredients
 import com.example.shisuan.utils.formatSnapshotLabel
@@ -447,6 +451,31 @@ fun BatchCard(
                     )
                 }
             }
+            // 原料改价断点：快照价与原料库现价不一致即历史价批，不折叠也能看到断点
+            if (item.priceDrifts.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    priceDriftBanner(item.priceDrifts),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = WarningOrange
+                )
+            }
+            // 按现价重算预览：只算不存，帮用户决定是否接受涨价/是否以新价建批次
+            item.recalculated?.let { preview ->
+                Spacer(Modifier.height(4.dp))
+                val pct = preview.diffPercentPerTon ?: 0.0
+                Text(
+                    recalcPreviewLine(preview),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = when {
+                        pct < -0.1 -> SuccessGreen
+                        pct > 0.1 -> WarningOrange
+                        else -> Foggy
+                    }
+                )
+            }
             Spacer(Modifier.height(8.dp))
             // 成本三列
             Row(
@@ -494,6 +523,18 @@ fun BatchCard(
                 IngredientCostDonut(
                     items = item.ingredients.map { it.ingredientName to it.totalCost }
                 )
+                // 偏离明细：哪种原料、本批价、现价、涨跌幅
+                if (item.priceDrifts.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    item.priceDrifts.forEach { drift ->
+                        Text(
+                            priceDriftDetail(drift),
+                            fontSize = 12.sp,
+                            color = Foggy
+                        )
+                        Spacer(Modifier.height(2.dp))
+                    }
+                }
                 Spacer(Modifier.height(4.dp))
                 Row {
                     TextButton(onClick = onShowOutcome) {
@@ -536,6 +577,41 @@ private fun CostCell(label: String, value: String) {
     }
 }
 
+/** 折叠态横幅：指出本批哪些原料用了历史价（单项展示全价，双项以上收拢） */
+private fun priceDriftBanner(drifts: List<com.example.shisuan.domain.model.IngredientPriceDrift>): String {
+    if (drifts.isEmpty()) return ""
+    if (drifts.size == 1) {
+        val d = drifts[0]
+        return "原料改价：${d.name} ¥${"%.2f".format(Locale.CHINA, d.batchPricePerKg)}" +
+            "→¥${"%.2f".format(Locale.CHINA, d.latestPricePerKg)}/kg（本批为历史价）"
+    }
+    val firstTwo = drifts.take(2).joinToString("、") { it.name }
+    return "原料改价：$firstTwo 等 ${drifts.size} 项（本批为历史价，展开查看）"
+}
+
+/** 展开态明细：原料名（含品牌）+ 本批价 → 现价 + 涨跌幅 */
+private fun priceDriftDetail(drift: com.example.shisuan.domain.model.IngredientPriceDrift): String {
+    val label = if (drift.brand.isNotEmpty()) "${drift.name}（${drift.brand}）" else drift.name
+    val prices = "本批 ¥${"%.2f".format(Locale.CHINA, drift.batchPricePerKg)}/kg" +
+        " → 现价 ¥${"%.2f".format(Locale.CHINA, drift.latestPricePerKg)}/kg"
+    val pct = drift.diffPercent?.let {
+        if (it > 0) " ↑${"%.1f".format(Locale.CHINA, it)}%"
+        else " ↓${"%.1f".format(Locale.CHINA, -it)}%"
+    } ?: ""
+    return "$label：$prices$pct"
+}
+
+/** 按现价重算预览行：重算吨价 + 涨跌幅 + 影响种数，明确只算不存 */
+private fun recalcPreviewLine(preview: com.example.shisuan.domain.model.RecalculatedPreview): String {
+    val ton = "按现价重算约 ¥${"%,.0f".format(Locale.CHINA, preview.recalcTonCost)}/吨"
+    val pct = preview.diffPercentPerTon?.let {
+        if (it > 0) "↑${"%.1f".format(Locale.CHINA, it)}%"
+        else "↓${"%.1f".format(Locale.CHINA, -it)}%"
+    }
+    val scope = if (pct != null) "$pct · ${preview.affectedCount}种原料" else "${preview.affectedCount}种原料"
+    return "$ton（$scope），仅预览不改存档"
+}
+
 /**
  * 版本历史时间线（git log 式）
  *
@@ -552,6 +628,18 @@ fun SnapshotHistorySheet(
     onRestoreClick: (BatchSnapshot) -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        // Diff 选择态：点「对比」选两个版本查看差异（单 sheet 内切换，不叠 bottom sheet）
+        var diffBase by remember { mutableStateOf<BatchSnapshot?>(null) }
+        var diffPair by remember { mutableStateOf<Pair<BatchSnapshot, BatchSnapshot>?>(null) }
+        val pair = diffPair
+        if (pair != null) {
+            SnapshotDiffContent(
+                a = pair.first,
+                b = pair.second,
+                onBack = { diffPair = null; diffBase = null }
+            )
+            return@ModalBottomSheet
+        }
         // 派生值移出组合：配料计数 + 时间格式化在 remember 中预计算，
         // 避免每次重组重复 lines().count 与 java.time 转换
         // Triple(snap, ingredientCount, label)：不用局部 data class，保证编译兼容
@@ -570,10 +658,19 @@ fun SnapshotHistorySheet(
             Text("版本历史", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Ink)
             Spacer(Modifier.height(4.dp))
             Text(
-                "每次保存生成一个版本，#编号为内容指纹；内容相同的保存不会重复记录",
+                "每次保存生成一个版本，#编号为内容指纹；点「对比」任选两个版本查看差异",
                 fontSize = 12.sp,
                 color = Foggy
             )
+            diffBase?.let { base ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "已选 #${base.digest} 为基准，再点另一个版本的「对比」即查看差异",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Rausch
+                )
+            }
             Spacer(Modifier.height(12.dp))
             if (snapshots.isEmpty()) {
                 Text("暂无历史版本", color = Foggy, fontSize = 13.sp)
@@ -634,6 +731,25 @@ fun SnapshotHistorySheet(
                                             Text("恢复到此版本", fontSize = 12.sp, color = Rausch)
                                         }
                                     }
+                                    // Diff 入口：第一次点设为基准，第二次点即打开两版本对比
+                                    val isBase = diffBase?.id == snap.id
+                                    TextButton(
+                                        onClick = {
+                                            val base = diffBase
+                                            when {
+                                                base == null -> diffBase = snap
+                                                base.id == snap.id -> diffBase = null
+                                                else -> diffPair = base to snap
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Text(
+                                            if (isBase) "取消选择" else "对比",
+                                            fontSize = 12.sp,
+                                            color = if (isBase) WarningOrange else Foggy
+                                        )
+                                    }
                                 }
                                 Text(
                                     label,
@@ -642,6 +758,116 @@ fun SnapshotHistorySheet(
                                 )
                                 Spacer(Modifier.height(8.dp))
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 版本对比视图（git diff 式）：两版本批次字段 + 配料增删改高亮。
+ *
+ * 新旧按版本号自动定向（小为旧、大为新），与点选顺序无关；
+ * 解码失败（损坏快照）时明确提示而非空白页。
+ */
+@Composable
+private fun SnapshotDiffContent(
+    a: BatchSnapshot,
+    b: BatchSnapshot,
+    onBack: () -> Unit
+) {
+    val decoded = remember(a, b) {
+        val da = BatchSnapshotCodec.decode(a.snapshotData)
+        val db = BatchSnapshotCodec.decode(b.snapshotData)
+        if (da == null || db == null) null
+        else if (a.version <= b.version) Triple(a, b, SnapshotDiffer.diff(da, db))
+        else Triple(b, a, SnapshotDiffer.diff(db, da))
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .navigationBarsPadding()
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("版本对比", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Ink)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onBack) {
+                Text("返回时间线", fontSize = 12.sp, color = Rausch)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        if (decoded == null) {
+            Text("快照数据损坏，无法对比", color = Foggy, fontSize = 13.sp)
+            Spacer(Modifier.height(24.dp))
+        } else {
+            val (oldS, newS, result) = decoded
+            Text(
+                "旧 #${oldS.digest}（第 ${oldS.version} 版） → 新 #${newS.digest}（第 ${newS.version} 版）",
+                fontSize = 12.sp,
+                color = Foggy
+            )
+            Spacer(Modifier.height(12.dp))
+            if (!result.hasChanges) {
+                Text("两个版本内容一致，无差异", color = Foggy, fontSize = 13.sp)
+                Spacer(Modifier.height(24.dp))
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    if (result.fieldChanges.isNotEmpty()) {
+                        item(key = "diff-fields-header") {
+                            Text(
+                                "批次字段",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Ink
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        items(result.fieldChanges, key = { "diff-field-${it.label}" }) { f ->
+                            Text(
+                                "${f.label}：${f.oldText} → ${f.newText}",
+                                fontSize = 13.sp,
+                                color = Body
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        item(key = "diff-fields-gap") { Spacer(Modifier.height(8.dp)) }
+                    }
+                    if (result.ingredientDiffs.isNotEmpty()) {
+                        item(key = "diff-ings-header") {
+                            Text(
+                                "配料变化",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Ink
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        items(
+                            result.ingredientDiffs,
+                            key = { "${it.kind}-${it.name}-${it.brand}-${it.detail}" }
+                        ) { d ->
+                            val color = when (d.kind) {
+                                IngredientDiffKind.ADDED -> SuccessGreen
+                                IngredientDiffKind.REMOVED -> DangerRed
+                                IngredientDiffKind.CHANGED -> Ink
+                            }
+                            val prefix = when (d.kind) {
+                                IngredientDiffKind.ADDED -> "＋ "
+                                IngredientDiffKind.REMOVED -> "－ "
+                                IngredientDiffKind.CHANGED -> "· "
+                            }
+                            Text(
+                                "$prefix${d.label}：${d.detail}",
+                                fontSize = 13.sp,
+                                color = color
+                            )
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
                 }

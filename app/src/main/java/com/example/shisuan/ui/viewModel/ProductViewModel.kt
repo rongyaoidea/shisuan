@@ -8,6 +8,10 @@ import com.example.shisuan.data.database.*
 import com.example.shisuan.data.repository.CostRepository
 import com.example.shisuan.data.repository.IngredientUpsert
 import com.example.shisuan.domain.model.CostResult
+import com.example.shisuan.domain.model.IngredientPriceDrift
+import com.example.shisuan.domain.model.PriceDriftDetector
+import com.example.shisuan.domain.model.RecalculatedCost
+import com.example.shisuan.domain.model.RecalculatedPreview
 import com.example.shisuan.domain.usecase.CalculateBatchCostUseCase
 import com.example.shisuan.domain.usecase.GenerateBatchNameUseCase
 import com.example.shisuan.utils.BatchSnapshotCodec
@@ -95,11 +99,15 @@ class ProductDetailViewModel @Inject constructor(
             else {
                 combine(
                     repo.getBatchesWithIngredients(id),
-                    repo.getProductById(id)
-                ) { rows, prod ->
+                    repo.getProductById(id),
+                    repo.allIngredientsWithUseCount
+                ) { rows, prod, libRows ->
                     val boxGram = prod?.weightPerBoxGram ?: DEFAULT_WEIGHT_PER_BOX_GRAM
                     val pkgBox = prod?.packagesPerBox ?: DEFAULT_PACKAGES_PER_BOX
                     val marginRate = prod?.targetMarginRate ?: 0.0
+                    // 原料库现价表（名称+品牌为键）：用于标出批次快照价与现价的偏离，
+                    // 历史批次保留旧价，UI 以「历史价」横幅指出断点。
+                    val latestByKey = libRows.associate { (it.ingredient.name to it.ingredient.supplier) to it.ingredient }
 
                     // 单次遍历算出全部成本结果；吨价数组复用该结果，避免第二次 calculate 重算。
                     // 整个 combine 变换经下游 flowOn(Dispatchers.Default) 切到后台，
@@ -122,6 +130,28 @@ class ProductDetailViewModel @Inject constructor(
                         val materialCost = materialCosts[index]
                         val processingCost = row.batch.processingCost
                         val result = results[index]
+                        val drifts = PriceDriftDetector.detect(row.ingredients, latestByKey)
+                        // 按现价重算预览：只算不存，无偏离或无可替换项时为 null（UI 不展示）
+                        val recalculated = if (drifts.isEmpty()) null else {
+                            val (newMaterial, affected) =
+                                RecalculatedCost.materialCostAtLatestPrices(row.ingredients, latestByKey)
+                            if (affected == 0) null else {
+                                val newResult = calculateBatchCostUseCase(
+                                    row.batch, newMaterial, boxGram, pkgBox
+                                )
+                                val diffAmount = newResult.unitCostPerTon - result.unitCostPerTon
+                                val diffPct = if (result.unitCostPerTon > 0) {
+                                    diffAmount / result.unitCostPerTon * 100.0
+                                } else null
+                                RecalculatedPreview(
+                                    recalcMaterialCost = newMaterial,
+                                    recalcTonCost = newResult.unitCostPerTon,
+                                    diffAmountPerTon = CostCalculator.round2(diffAmount),
+                                    diffPercentPerTon = diffPct?.let { CostCalculator.round2(it) },
+                                    affectedCount = affected
+                                )
+                            }
+                        }
                         BatchWithCostUI(
                             batch = row.batch,
                             ingredients = row.ingredients,
@@ -135,7 +165,9 @@ class ProductDetailViewModel @Inject constructor(
                             ),
                             suggestedTonPrice = CostCalculator.suggestedTonPrice(
                                 result.unitCostPerTon, marginRate
-                            )
+                            ),
+                            priceDrifts = drifts,
+                            recalculated = recalculated
                         )
                     }
                 }
@@ -759,7 +791,11 @@ data class BatchWithCostUI(
     val totalCost: Double,
     val result: CostResult,
     val differential: CostCalculator.CostDifferential?,
-    val suggestedTonPrice: Double? = null
+    val suggestedTonPrice: Double? = null,
+    /** 本批快照价与原料库现价的偏离；为空 = 与现价一致（现价批），非空 = 历史价批 */
+    val priceDrifts: List<IngredientPriceDrift> = emptyList(),
+    /** 按现价重算的吨价预览（只算不存）；无偏离时为 null */
+    val recalculated: RecalculatedPreview? = null
 )
 
 /**
