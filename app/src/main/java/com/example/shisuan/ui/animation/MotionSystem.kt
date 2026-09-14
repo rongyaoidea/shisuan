@@ -113,20 +113,23 @@ fun AnimatedNumber(
     fontWeight: FontWeight? = null,
     color: Color = Color.Unspecified
 ) {
-    val displayed = remember { Animatable(value, Double.VectorConverter) }
+    val displayed = remember { mutableDoubleStateOf(value) }
     LaunchedEffect(value) {
-        if (displayed.value != value) {
-            displayed.animateTo(
-                value,
+        val from = displayed.doubleValue
+        if (from != value) {
+            Animatable(0f).animateTo(
+                1f,
                 spring(
                     dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = Spring.StiffnessMediumLow
                 )
-            )
+            ) {
+                displayed.doubleValue = from + (value - from) * this.value
+            }
         }
     }
     Text(
-        format(displayed.value),
+        format(displayed.doubleValue),
         modifier = modifier,
         fontSize = fontSize,
         fontWeight = fontWeight,
