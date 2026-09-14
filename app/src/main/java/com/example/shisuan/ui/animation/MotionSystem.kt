@@ -6,9 +6,13 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -92,4 +96,40 @@ fun Modifier.entranceAnimation(
         translationY = offsetY.value
         this.alpha = alpha.value
     }
+}
+
+/**
+ * 数字滚动 — 数值变化时平滑滑向新值（无过冲，金钱数值回弹会显轻浮）。
+ *
+ * 初次组合直接显示终值（不从 0 起播，避免列表滚动时满屏乱滚）；
+ * 只响应后续 value 变化，如原料改价后吨价的滑升/滑降。
+ */
+@Composable
+fun AnimatedNumber(
+    value: Double,
+    format: (Double) -> String,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    fontWeight: FontWeight? = null,
+    color: Color = Color.Unspecified
+) {
+    val displayed = remember { Animatable(value, Double.VectorConverter) }
+    LaunchedEffect(value) {
+        if (displayed.value != value) {
+            displayed.animateTo(
+                value,
+                spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
+        }
+    }
+    Text(
+        format(displayed.value),
+        modifier = modifier,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        color = color
+    )
 }

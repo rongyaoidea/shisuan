@@ -1,5 +1,8 @@
 package com.example.shisuan.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -139,6 +144,10 @@ fun CostTrendChart(
 /**
  * 配料成本占比环形图（含图例）。
  *
+ * 扇区随数据展开动画：从 0 扫到目标角度（700ms 快慢曲线），
+ * 数据变化时重播。LaunchedEffect 以 items 结构相等性去重，
+ * 纯重组（新列表实例、内容不变）不会重播。
+ *
  * @param items (配料名, 成本)；总成本非正时不绘制
  */
 @Composable
@@ -148,6 +157,13 @@ fun IngredientCostDonut(
 ) {
     val total = items.sumOf { it.second }
     if (total <= 0.0 || items.isEmpty()) return
+    val sweeps = remember(items) { donutSweepAngles(items) }
+
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(items) {
+        progress.snapTo(0f)
+        progress.animateTo(1f, tween(700, easing = FastOutSlowInEasing))
+    }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -155,16 +171,15 @@ fun IngredientCostDonut(
     ) {
         Canvas(modifier = Modifier.size(110.dp)) {
             var startAngle = -90f
-            items.forEachIndexed { index, (_, value) ->
-                val sweep = (value / total * 360.0).toFloat()
+            sweeps.forEachIndexed { index, sweep ->
                 drawArc(
                     color = DonutPalette[index % DonutPalette.size],
                     startAngle = startAngle,
-                    sweepAngle = sweep,
+                    sweepAngle = sweep * progress.value,
                     useCenter = false,
                     style = Stroke(width = size.minDimension / 5)
                 )
-                startAngle += sweep
+                startAngle += sweep * progress.value
             }
         }
         Spacer(Modifier.width(16.dp))
@@ -205,4 +220,16 @@ fun IngredientCostDonut(
                 }
         }
     }
+}
+
+/**
+ * 环形图各扇区扫过角度（度），与绘制顺序一致。
+ *
+ * 纯函数：动画进度在调用方相乘（sweep * progress），便于单测锁定
+ * 占比归一（总和 360）与零/负总成本的空结果。
+ */
+fun donutSweepAngles(items: List<Pair<String, Double>>): List<Float> {
+    val total = items.sumOf { it.second }
+    if (total <= 0.0 || items.isEmpty()) return emptyList()
+    return items.map { (_, value) -> (value / total * 360.0).toFloat() }
 }

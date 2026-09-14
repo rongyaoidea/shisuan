@@ -23,6 +23,7 @@ import com.example.shisuan.data.database.BatchSnapshot
 import com.example.shisuan.data.database.Product
 import com.example.shisuan.domain.model.IngredientDiffKind
 import com.example.shisuan.domain.model.SnapshotDiffer
+import com.example.shisuan.ui.animation.AnimatedNumber
 import com.example.shisuan.ui.animation.entranceAnimation
 import com.example.shisuan.ui.animation.pressScale
 import com.example.shisuan.ui.components.CostTrendChart
@@ -588,16 +589,18 @@ fun BatchCard(
             ) {
                 Text("吨价", fontSize = 11.sp, color = Foggy)
                 Spacer(Modifier.width(6.dp))
-                Text(
-                    "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}",
+                AnimatedNumber(
+                    value = item.result.unitCostPerTon,
+                    format = { "¥${"%,.0f".format(Locale.CHINA, it)}" },
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = Ink
                 )
                 Spacer(Modifier.weight(1f))
                 item.suggestedTonPrice?.let { price ->
-                    Text(
-                        "建议出厂价 ¥%,.0f/吨".format(Locale.CHINA, price),
+                    AnimatedNumber(
+                        value = price,
+                        format = { "建议出厂价 ¥%,.0f/吨".format(Locale.CHINA, it) },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Rausch
@@ -611,9 +614,9 @@ fun BatchCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    CostCell("吨价", "¥${"%,.0f".format(Locale.CHINA, item.result.unitCostPerTon)}")
-                    CostCell("箱价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerBox)}")
-                    CostCell("包价", "¥${"%.2f".format(Locale.CHINA, item.result.costPerPackage)}")
+                    CostCell("吨价", item.result.unitCostPerTon) { "¥${"%,.0f".format(Locale.CHINA, it)}" }
+                    CostCell("箱价", item.result.costPerBox) { "¥${"%.2f".format(Locale.CHINA, it)}" }
+                    CostCell("包价", item.result.costPerPackage) { "¥${"%.2f".format(Locale.CHINA, it)}" }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -683,10 +686,16 @@ fun BatchCard(
 }
 
 @Composable
-private fun CostCell(label: String, value: String) {
+private fun CostCell(label: String, value: Double, format: (Double) -> String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, fontSize = 11.sp, color = Foggy)
-        Text(value, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+        AnimatedNumber(
+            value = value,
+            format = format,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Ink
+        )
     }
 }
 
