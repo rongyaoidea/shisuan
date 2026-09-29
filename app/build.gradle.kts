@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.shisuan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.10.0"
+        versionCode = 14
+        versionName = "1.11.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Rust .so 按 ABI 分包：只打包真机常用 ABI，减小 APK 体积；
