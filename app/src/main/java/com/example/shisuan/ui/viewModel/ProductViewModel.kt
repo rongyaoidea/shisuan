@@ -12,6 +12,7 @@ import com.example.shisuan.domain.model.IngredientPriceDrift
 import com.example.shisuan.domain.model.PriceDriftDetector
 import com.example.shisuan.domain.model.RecalculatedCost
 import com.example.shisuan.domain.model.RecalculatedPreview
+import com.example.shisuan.domain.model.YieldLoss
 import com.example.shisuan.domain.usecase.CalculateBatchCostUseCase
 import com.example.shisuan.domain.usecase.GenerateBatchNameUseCase
 import com.example.shisuan.utils.BatchSnapshotCodec
@@ -265,6 +266,7 @@ class ProductDetailViewModel @Inject constructor(
      *
      * 总成本不随出品率变化，而吨价 ∝ 1/出品率（effectiveWeight = 投料 × 出品率），
      * 因此「损耗影响」与「恢复到最佳的节省」都是纯比例换算，不必重算成本。
+     * 具体换算收在 [YieldLoss]，其中 lossImpactPercent 返回的是**百分数**。
      */
     val yieldAnalysis: StateFlow<YieldAnalysis?> = batchesWithCost.map { rows ->
         val recorded = rows.filter { (it.batch.yieldRatePercent ?: 0.0) > 0.0 }
@@ -276,9 +278,13 @@ class ProductDetailViewModel @Inject constructor(
         val avg = recorded.sumOf { it.batch.yieldRatePercent!! } / recorded.size
         val best = recorded.maxBy { it.batch.yieldRatePercent!! }
 
+        // 最近批次自身就是最佳时谈不上「恢复到最佳」，不显示节省
         val savingPerTon = if (best.batch.id != latest.batch.id) {
-            latest.result.unitCostPerTon *
-                (1.0 - latestYield / best.batch.yieldRatePercent!!)
+            YieldLoss.potentialSavingPerTon(
+                recentCostPerTon = latest.result.unitCostPerTon,
+                recentYieldPercent = latestYield,
+                bestYieldPercent = best.batch.yieldRatePercent
+            )
         } else null
 
         YieldAnalysis(
@@ -286,10 +292,10 @@ class ProductDetailViewModel @Inject constructor(
             recordedCount = recorded.size,
             latestBatchName = latest.batch.batchName,
             latestYieldPercent = latestYield,
-            lossImpactPercent = 100.0 / latestYield - 1.0,
+            lossImpactPercent = YieldLoss.lossImpactPercent(latestYield),
             bestBatchName = best.batch.batchName,
             bestYieldPercent = best.batch.yieldRatePercent,
-            potentialSavingPerTon = savingPerTon?.let { CostCalculator.round2(it) }
+            potentialSavingPerTon = savingPerTon
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -804,7 +810,8 @@ data class BatchWithCostUI(
  * @param avgYieldPercent 有出品率记录批次的均值
  * @param recordedCount 记录了出品率的批次数
  * @param latestBatchName / latestYieldPercent 最近一次记录的批次名与出品率
- * @param lossImpactPercent 熬煮损耗使吨价上升的百分比 = 100/出品率 - 1
+ * @param lossImpactPercent 熬煮损耗使吨价上升的**百分数**（出品率 85 时为 17.6，不是 0.176）。
+ *   由 [YieldLoss.lossImpactPercent] 计算，UI 直接 `%.1f%%` 格式化。
  * @param bestBatchName / bestYieldPercent 历史最佳出品率及其批次
  * @param potentialSavingPerTon 最近批次若恢复到最佳出品率，吨价可降金额（元/吨）；
  *   最近批次已是最佳时为 null
